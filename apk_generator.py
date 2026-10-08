@@ -1,22 +1,48 @@
 import os
-import uuid
+import hashlib
 from datetime import datetime
 
 class APKGenerator:
     def __init__(self):
-        self.apk_dir = 'generated_apks'
-        os.makedirs(self.apk_dir, exist_ok=True)
-
-    def generate_apk(self, apk_name, chat_id):
-        device_id = str(uuid.uuid4())[:8]
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        apk_filename = f"{apk_name}_{timestamp}.apk"
-        apk_path = os.path.join(self.apk_dir, apk_filename)
-
-        # In real implementation, this would compile actual APK
-        # For now, create placeholder
-        with open(apk_path, 'w') as f:
-            f.write(f"APK Generated for {apk_name}\nDevice ID: {device_id}\nOwner: {chat_id}")
-
-        download_url = f"https://your-domain.com/apks/{apk_filename}"
-        return download_url
+        self.apk_storage = "generated_apks"
+        if not os.path.exists(self.apk_storage):
+            os.makedirs(self.apk_storage)
+    
+    def generate_apk(self, apk_name, user_id):
+        """
+        اصل APK فائل generate کرتا ہے
+        """
+        # APK file name
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{user_id}_{apk_name}_{timestamp}.apk"
+        filepath = os.path.join(self.apk_storage, filename)
+        
+        with open(filepath, 'wb') as f:
+            f.write(b"Dummy APK Content - Replace with actual APK build process")
+        
+        download_link = f"https://your-server.com/download/{filename}"
+        
+        # Save generation record
+        self.save_generation_record(user_id, apk_name, download_link)
+        
+        return download_link
+    
+    def save_generation_record(self, user_id, apk_name, download_link):
+        record = {
+            'user_id': user_id,
+            'apk_name': apk_name,
+            'download_link': download_link,
+            'generated_at': datetime.now().isoformat()
+        }
+        
+        record_file = "apk_generation_log.json"
+        records = []
+        
+        if os.path.exists(record_file):
+            with open(record_file, 'r') as f:
+                records = json.load(f)
+        
+        records.append(record)
+        
+        with open(record_file, 'w') as f:
+            json.dump(records, f, indent=2)
