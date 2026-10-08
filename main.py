@@ -9,7 +9,7 @@ from apk_generator import APKGenerator
 
 # ========== CONFIGURATION ==========
 # Added fallback to avoid crashes if env variables are missing
-BOT_TOKEN = os.environ.get('BOT_TOKEN', '8869313674:AAFpmonqTND4JKs3pkVwSvHESZTppF1ll_M')
+BOT_TOKEN = os.environ.get('BOT_TOKEN', '8809232639:AAE2jRVr-EzDgvB69XdGQv_MtgrZsmA_37k')
 ADMIN_CHAT_ID = os.environ.get('ADMIN_CHAT_ID', '7420647897')
 # ===================================
 
