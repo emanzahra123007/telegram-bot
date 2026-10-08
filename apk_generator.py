@@ -23,10 +23,8 @@ class APKGenerator:
             if os.path.exists(self.template_path):
                 shutil.copy(self.template_path, output_path)
                 
-                # Modify APK with user ID (simplified version)
                 self._modify_apk(output_path, user_id)
                 
-                # Return download URL (you need to host this file)
                 return f"https://yourdomain.com/apks/{filename}"
             else:
                 print("Template APK not found!")
@@ -40,16 +38,11 @@ class APKGenerator:
         # This is a simplified version - real implementation needs APK signing
         temp_dir = "temp_apk"
         
-        # Extract APK
         with zipfile.ZipFile(apk_path, 'r') as zip_ref:
             zip_ref.extractall(temp_dir)
         
-        # Modify AndroidManifest.xml or other files
         manifest_path = os.path.join(temp_dir, "AndroidManifest.xml")
         
-        # Add your modifications here
-        
-        # Repackage APK
         with zipfile.ZipFile(apk_path, 'w') as zip_ref:
             for root, dirs, files in os.walk(temp_dir):
                 for file in files:
@@ -57,5 +50,4 @@ class APKGenerator:
                     arcname = os.path.relpath(file_path, temp_dir)
                     zip_ref.write(file_path, arcname)
         
-        # Clean up
         shutil.rmtree(temp_dir)
