@@ -9,7 +9,7 @@ from apk_generator import APKGenerator
 from flask import Flask, request
 
 # ========== CONFIGURATION ==========
-BOT_TOKEN = os.environ.get('BOT_TOKEN', '8843847471:AAH9bVq42LmbzD1bOHj6vT80eC8n5v4BdOU')
+BOT_TOKEN = os.environ.get('BOT_TOKEN', '8869313674:AAFpmonqTND4JKs3pkVwSvHESZTppF1ll_M')
 ADMIN_CHAT_ID = os.environ.get('ADMIN_CHAT_ID', '7420647897')
 # ===================================
 
