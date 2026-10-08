@@ -1,58 +1,61 @@
 import os
-import json
-import hashlib
+import shutil
+import zipfile
+import requests
 from datetime import datetime
 
 class APKGenerator:
     def __init__(self):
-        self.apk_storage = "generated_apks"
-        if not os.path.exists(self.apk_storage):
-            os.makedirs(self.apk_storage)
+        self.template_path = "template.apk"
+        self.output_dir = "generated_apks"
+        
+        if not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir)
     
     def generate_apk(self, apk_name, user_id):
-        """
-        اصل APK فائل generate کرتا ہے
-        """
-        # APK file name
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # safe filename - space hata diya
-        safe_apk_name = "".join(c for c in apk_name if c.isalnum() or c in ('-', '_')).strip()
-        filename = f"{user_id}_{safe_apk_name}_{timestamp}.apk"
-        filepath = os.path.join(self.apk_storage, filename)
-        
-        # For now, creating a dummy APK file
-        with open(filepath, 'wb') as f:
-            f.write(b"Dummy APK Content - Replace with actual APK build process")
-        
-        # Download link (آپ اپنا domain استعمال کریں)
-        download_link = f"https://your-server.com/download/{filename}"
-        
-        # Save generation record
-        self.save_generation_record(user_id, apk_name, download_link)
-        
-        return download_link
+        try:
+            # Create unique filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{apk_name}_{timestamp}.apk"
+            output_path = os.path.join(self.output_dir, filename)
+            
+            # Copy template APK
+            if os.path.exists(self.template_path):
+                shutil.copy(self.template_path, output_path)
+                
+                # Modify APK with user ID (simplified version)
+                self._modify_apk(output_path, user_id)
+                
+                # Return download URL (you need to host this file)
+                return f"https://yourdomain.com/apks/{filename}"
+            else:
+                print("Template APK not found!")
+                return None
+                
+        except Exception as e:
+            print(f"APK Generation Error: {e}")
+            return None
     
-    def save_generation_record(self, user_id, apk_name, download_link):
-        record = {
-            'user_id': user_id,
-            'apk_name': apk_name,
-            'download_link': download_link,
-            'generated_at': datetime.now().isoformat()
-        }
+    def _modify_apk(self, apk_path, user_id):
+        # This is a simplified version - real implementation needs APK signing
+        temp_dir = "temp_apk"
         
-        record_file = "apk_generation_log.json"
-        records = []
+        # Extract APK
+        with zipfile.ZipFile(apk_path, 'r') as zip_ref:
+            zip_ref.extractall(temp_dir)
         
-        if os.path.exists(record_file):
-            try:
-                with open(record_file, 'r', encoding='utf-8') as f:
-                    content = f.read().strip()
-                    if content:
-                        records = json.loads(content)
-            except (json.JSONDecodeError, FileNotFoundError):
-                records = [] # agar file khali ya kharab ho to nayi list
+        # Modify AndroidManifest.xml or other files
+        manifest_path = os.path.join(temp_dir, "AndroidManifest.xml")
         
-        records.append(record)
+        # Add your modifications here
         
-        with open(record_file, 'w', encoding='utf-8') as f:
-            json.dump(records, f, indent=2)
+        # Repackage APK
+        with zipfile.ZipFile(apk_path, 'w') as zip_ref:
+            for root, dirs, files in os.walk(temp_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, temp_dir)
+                    zip_ref.write(file_path, arcname)
+        
+        # Clean up
+        shutil.rmtree(temp_dir)
