@@ -10,7 +10,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ.get('BOT_TOKEN', '8869480576:AAEzBO0-lc2oNC8uZIAfxyjQvWqSS2NPii4')
+BOT_TOKEN = os.environ.get('BOT_TOKEN', '8869480576:AAECZ54aAnROdV4piOPSltwTJfvE3rXHcAs')
 OWNER_TELEGRAM_ID = "@Nawab_Zada_Hacker_007"
 
 if not BOT_TOKEN:
