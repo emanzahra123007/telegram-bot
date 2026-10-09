@@ -9,7 +9,7 @@ import threading
 from flask import Flask, request, send_file
 
 # ========== CONFIGURATION ==========
-BOT_TOKEN = os.environ.get('BOT_TOKEN', '8869480576:AAHdIlzVaxUkvRasH2LfTGK98bAtmfdB_9c')
+BOT_TOKEN = os.environ.get('BOT_TOKEN', '8869480576:AAEzBO0-lc2oNC8uZIAfxyjQvWqSS2NPii4')
 OWNER_TELEGRAM_ID = "https://t.me/Nawab_Zada_Hacker_007"
 # ===================================
 
