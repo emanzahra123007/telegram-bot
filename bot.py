@@ -19,8 +19,8 @@ def load_env_vars():
     try:
         from dotenv import load_dotenv
         load_dotenv()
-        bot_token = os.getenv('BOT_TOKEN')
-        admin_chat_id_str = os.getenv('ADMIN_CHAT_ID')
+        bot_token = os.getenv('8869480576:AAHtyVBCJrAmGza3VbPfLp7OzRv3RvYqdWw')
+        admin_chat_id_str = os.getenv('7420647897')
         
         if not bot_token:
             raise ValueError("BOT_TOKEN is missing in .env")
