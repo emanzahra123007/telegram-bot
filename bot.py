@@ -19,7 +19,7 @@ def load_env_vars():
     try:
         from dotenv import load_dotenv
         load_dotenv()
-        bot_token = os.getenv('8869480576:AAHtyVBCJrAmGza3VbPfLp7OzRv3RvYqdWw')
+        bot_token = os.getenv('8815196147:AAEqTTw-hpIQAfGoYm__WqKWB2We_0xs8Jk')
         admin_chat_id_str = os.getenv('7420647897')
         
         if not bot_token:
